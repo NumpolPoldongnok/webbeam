@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebBeam — ส่งไฟล์ระหว่างเครื่องใกล้กัน (offline, P2P)</title>
+<style>
+  :root {
+    --bg: #0f1115; --card: #1a1d24; --card2: #22262f; --line: #2c313c;
+    --text: #e8eaed; --muted: #9aa0aa; --accent: #4f8cff; --green: #34c759;
+    --red: #ff453a; --orange: #ff9f0a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.5;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 28px 20px 60px; }
+  header h1 { font-size: 28px; margin: 0 0 4px; display: flex; align-items: center; gap: 10px; }
+  header p { color: var(--muted); margin: 0 0 24px; font-size: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+  .card h2 { font-size: 15px; margin: 0 0 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 9px;
+    padding: 9px 16px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button:hover { filter: brightness(1.08); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.ghost { background: var(--card2); color: var(--text); border: 1px solid var(--line); }
+  textarea {
+    width: 100%; min-height: 70px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 9px; padding: 10px; font-family: ui-monospace, monospace;
+    font-size: 12px; resize: vertical; margin-top: 8px;
+  }
+  .seg { display: inline-flex; background: var(--card2); border-radius: 10px; padding: 3px; gap: 3px; }
+  .seg button { background: transparent; color: var(--muted); padding: 7px 18px; }
+  .seg button.on { background: var(--accent); color: #fff; }
+  .status { display: flex; align-items: center; gap: 9px; font-size: 14px; color: var(--muted); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #555; }
+  .dot.on { background: var(--green); } .dot.wait { background: var(--orange); }
+  .drop {
+    border: 2px dashed var(--line); border-radius: 14px; padding: 34px; text-align: center;
+    color: var(--muted); transition: .15s; cursor: pointer;
+  }
+  .drop.hot { border-color: var(--accent); background: rgba(79,140,255,.08); color: var(--text); }
+  .drop.off { opacity: .45; pointer-events: none; }
+  .drop .big { font-size: 34px; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .xfer { background: var(--card2); border-radius: 9px; padding: 10px 12px; margin-top: 8px; }
+  .xfer .top { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+  .bar { height: 6px; background: var(--bg); border-radius: 4px; overflow: hidden; margin-top: 6px; }
+  .bar > div { height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+  .bar.done > div { background: var(--green); } .bar.fail > div { background: var(--red); }
+  .step { font-size: 13px; color: var(--muted); margin: 0 0 8px; }
+  .step b { color: var(--text); }
+  code { background: var(--card2); padding: 1px 6px; border-radius: 5px; font-size: 12px; }
+  .hidden { display: none; }
+  a { color: var(--accent); }
+  .small { font-size: 12px; color: var(--muted); }
+  details.help { background: var(--card); border: 1px solid var(--line); border-radius: 14px; margin-bottom: 16px; }
+  details.help > summary { cursor: pointer; padding: 14px 18px; font-weight: 600; font-size: 14px; list-style: none; }
+  details.help > summary::-webkit-details-marker { display: none; }
+  details.help > summary::before { content: "▸ "; color: var(--accent); }
+  details.help[open] > summary::before { content: "▾ "; }
+  details.help .body { padding: 0 18px 16px; font-size: 13px; color: var(--muted); }
+  details.help .body ol { margin: 6px 0; padding-left: 20px; } details.help .body li { margin: 4px 0; }
+  details.help .body b { color: var(--text); }
+  details.help .body .tip { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>📡 WebBeam</h1>
+    <p>ส่งไฟล์ระหว่างเครื่องที่อยู่ LAN เดียวกัน — peer-to-peer, ทำงาน offline, ไม่ต้องติดตั้ง ไม่ผ่านเซิร์ฟเวอร์</p>
+  </header>
+
+  <!-- วิธีใช้งาน (พับได้) -->
+  <details class="help">
+    <summary>วิธีใช้งาน (กดเพื่อดู)</summary>
+    <div class="body">
+      <b>เตรียม:</b> เปิดแอปนี้ทั้งสองเครื่อง · ทั้งคู่ต้องอยู่ Wi-Fi/LAN วงเดียวกัน · แนะนำ Chrome/Edge
+      <ol>
+        <li><b>เลือกบทบาท</b> — เครื่องนึงเป็น <b>A (เริ่ม)</b> อีกเครื่องเป็น <b>B (เข้าร่วม)</b></li>
+        <li><b>A</b> กด "สร้างรหัสของฉัน" → คัดลอก → ส่งให้ B</li>
+        <li><b>B</b> วางรหัสจาก A → กด "สร้างรหัสตอบกลับ" → คัดลอก → ส่งกลับให้ A</li>
+        <li><b>A</b> วางรหัสตอบกลับ → กด "เชื่อมต่อ" → รอจุดสถานะเป็น <b>🟢 เขียว</b></li>
+        <li>ฝั่งรับ กด "เลือกโฟลเดอร์…" (ไฟล์ใหญ่จะ stream ลงดิสก์)</li>
+        <li><b>ลากไฟล์มาวาง</b> ในกรอบเพื่อส่ง — ส่งได้สองทาง หลายไฟล์พร้อมกัน</li>
+      </ol>
+      <div class="tip">
+        <b>ต่อไม่ติด / ไม่ขึ้นเขียว?</b> เช็กว่าอยู่ Wi-Fi วงเดียวกัน และเครือข่ายไม่เปิด client isolation
+        (Wi-Fi สาธารณะมักเปิด) — ลองใช้ Wi-Fi บ้านหรือเปิด hotspot ·
+        <b>ปุ่มคัดลอก/เลือกโฟลเดอร์กดไม่ได้?</b> ต้องเปิดผ่าน file://, localhost หรือ https
+      </div>
+    </div>
+  </details>
+
+  <!-- เลือกบทบาท -->
+  <div class="card">
+    <h2>1 · เลือกบทบาท</h2>
+    <div class="seg" id="roleSeg">
+      <button data-role="a" class="on">เริ่มการเชื่อมต่อ (เครื่อง A)</button>
+      <button data-role="b">เข้าร่วม (เครื่อง B)</button>
+    </div>
+    <p class="hint" id="roleHint">เลือกเครื่องนึงเป็น A อีกเครื่องเป็น B — ทำตามขั้นตอนที่ขึ้นด้านล่าง</p>
+  </div>
+
+  <!-- ขั้นตอน A -->
+  <div class="card" id="panelA">
+    <h2>2 · เชื่อมต่อ (เครื่อง A)</h2>
+    <p class="step"><b>ขั้น 1:</b> กดสร้างรหัส แล้วส่งให้เครื่อง B</p>
+    <div class="row"><button id="btnCreateOffer">สร้างรหัสของฉัน</button>
+      <button class="ghost" id="copyOffer" disabled>คัดลอก</button></div>
+    <textarea id="offerOut" placeholder="รหัสของคุณจะปรากฏที่นี่…" readonly></textarea>
+    <p class="step" style="margin-top:14px"><b>ขั้น 2:</b> วางรหัสตอบกลับจากเครื่อง B แล้วกดเชื่อมต่อ</p>
+    <textarea id="answerIn" placeholder="วางรหัสตอบกลับจากเครื่อง B ที่นี่…"></textarea>
+    <div class="row" style="margin-top:8px"><button id="btnAcceptAnswer" disabled>เชื่อมต่อ</button></div>
+  </div>
+
+  <!-- ขั้นตอน B -->
+  <div class="card hidden" id="panelB">
+    <h2>2 · เชื่อมต่อ (เครื่อง B)</h2>
+    <p class="step"><b>ขั้น 1:</b> วางรหัสจากเครื่อง A แล้วกดสร้างรหัสตอบกลับ</p>
+    <textarea id="offerIn" placeholder="วางรหัสจากเครื่อง A ที่นี่…"></textarea>
+    <div class="row" style="margin-top:8px"><button id="btnCreateAnswer">สร้างรหัสตอบกลับ</button></div>
+    <p class="step" style="margin-top:14px"><b>ขั้น 2:</b> ส่งรหัสตอบกลับนี้กลับไปให้เครื่อง A</p>
+    <div class="row"><button class="ghost" id="copyAnswer" disabled>คัดลอก</button></div>
+    <textarea id="answerOut" placeholder="รหัสตอบกลับจะปรากฏที่นี่…" readonly></textarea>
+  </div>
+
+  <!-- สถานะ -->
+  <div class="card">
+    <div class="status"><span class="dot" id="dot"></span><span id="status">ยังไม่เชื่อมต่อ</span></div>
+  </div>
+
+  <!-- ปลายทางการบันทึก (ฝั่งรับ) -->
+  <div class="card" id="destCard">
+    <h2>โฟลเดอร์ปลายทาง (สำหรับไฟล์ที่ได้รับ)</h2>
+    <div class="row">
+      <button class="ghost" id="pickDir">เลือกโฟลเดอร์…</button>
+      <span class="small" id="destText">ยังไม่เลือก — จะดาวน์โหลดผ่านเบราว์เซอร์แทน</span>
+    </div>
+    <p class="hint" id="fsHint"></p>
+  </div>
+
+  <!-- ส่งไฟล์ -->
+  <div class="card">
+    <h2>3 · ส่งไฟล์ (ลากมาวางได้)</h2>
+    <div class="drop off" id="drop">
+      <input type="file" id="fileInput" multiple class="hidden">
+      <div class="big">⬆️</div>
+      <div id="dropText">เชื่อมต่อก่อน แล้วจึงลากไฟล์มาวาง หรือคลิกเพื่อเลือก</div>
+      <div class="hint">ส่งได้หลายไฟล์พร้อมกัน · ไฟล์ใหญ่ stream ลงดิสก์โดยตรง</div>
+    </div>
+    <div id="xfers"></div>
+  </div>
+
+  <p class="small">เคล็ดลับ: ใช้ <b>Chrome/Edge</b> ทั้งสองเครื่องเพื่อให้รับไฟล์ใหญ่ได้ (stream ลงดิสก์) ·
+    ทั้งสองเครื่องต้องอยู่ Wi-Fi/LAN เดียวกัน · ไม่ต้องมี internet</p>
+</div>
+
+<script>
+"use strict";
+
+// ---------- helpers ----------
+const $ = (id) => document.getElementById(id);
+const enc = (obj) => btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
+const dec = (str) => JSON.parse(decodeURIComponent(escape(atob(str.trim()))));
+const fmtBytes = (n) => {
+  if (n < 1024) return n + " B";
+  const u = ["KB","MB","GB","TB"]; let i = -1;
+  do { n /= 1024; i++; } while (n >= 1024 && i < u.length-1);
+  return n.toFixed(1) + " " + u[i];
+};
+
+const CHUNK = 64 * 1024;            // 64KB ต่อ chunk
+// Chrome จำกัด bufferedAmount ไม่เกิน ~16MB (เกินแล้ว send() จะ throw + channel ตาย)
+// จึงหยุดส่งตั้งแต่ 4MB เผื่อ headroom แล้วรอ buffer ระบายลงต่ำก่อนส่งต่อ
+const HIGH_WATER = 4 * 1024 * 1024;
+
+let pc = null, channel = null, dirHandle = null;
+let role = "a";
+
+// ---------- UI: บทบาท ----------
+$("roleSeg").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  role = b.dataset.role;
+  [...$("roleSeg").children].forEach(x => x.classList.toggle("on", x === b));
+  $("panelA").classList.toggle("hidden", role !== "a");
+  $("panelB").classList.toggle("hidden", role !== "b");
+});
+
+function setStatus(text, state) { // state: '', 'wait', 'on'
+  $("status").textContent = text;
+  $("dot").className = "dot" + (state ? " " + state : "");
+}
+
+// ---------- WebRTC setup ----------
+function newPeer() {
+  // iceServers ว่าง = ใช้เฉพาะ host/mDNS candidates → ทำงานบน LAN โดยไม่ต้องมี internet
+  pc = new RTCPeerConnection({ iceServers: [] });
+  pc.onconnectionstatechange = () => {
+    const s = pc.connectionState;
+    if (s === "connected") setStatus("✅ เชื่อมต่อแล้ว — พร้อมส่งไฟล์", "on");
+    else if (s === "connecting") setStatus("⏳ กำลังเชื่อมต่อ…", "wait");
+    else if (s === "failed" || s === "disconnected" || s === "closed")
+      setStatus("การเชื่อมต่อหลุด (" + s + ")", "");
+  };
+  pc.ondatachannel = (e) => setupChannel(e.channel); // ฝั่ง B รับ channel
+}
+
+function waitIceComplete() {
+  return new Promise((res) => {
+    if (pc.iceGatheringState === "complete") return res();
+    const check = () => {
+      if (pc.iceGatheringState === "complete") {
+        pc.removeEventListener("icegatheringstatechange", check); res();
+      }
+    };
+    pc.addEventListener("icegatheringstatechange", check);
+    setTimeout(res, 3000); // กันค้างบน LAN
+  });
+}
+
+// ---------- A: สร้าง offer ----------
+$("btnCreateOffer").addEventListener("click", async () => {
+  newPeer();
+  const ch = pc.createDataChannel("file", { ordered: true });
+  setupChannel(ch);
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  setStatus("รอแลกรหัสกับเครื่อง B…", "wait");
+  await waitIceComplete();
+  $("offerOut").value = enc(pc.localDescription);
+  $("copyOffer").disabled = false;
+  $("btnAcceptAnswer").disabled = false;
+  $("btnCreateOffer").disabled = true;
+});
+
+$("btnAcceptAnswer").addEventListener("click", async () => {
+  try {
+    const answer = dec($("answerIn").value);
+    await pc.setRemoteDescription(answer);
+    setStatus("⏳ กำลังเชื่อมต่อ…", "wait");
+  } catch (e) { alert("รหัสตอบกลับไม่ถูกต้อง: " + e.message); }
+});
+
+// ---------- B: สร้าง answer ----------
+$("btnCreateAnswer").addEventListener("click", async () => {
+  try {
+    newPeer();
+    const offer = dec($("offerIn").value);
+    await pc.setRemoteDescription(offer);
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    setStatus("รอเครื่อง A เชื่อมต่อ…", "wait");
+    await waitIceComplete();
+    $("answerOut").value = enc(pc.localDescription);
+    $("copyAnswer").disabled = false;
+    $("btnCreateAnswer").disabled = true;
+  } catch (e) { alert("รหัสจากเครื่อง A ไม่ถูกต้อง: " + e.message); }
+});
+
+// ---------- copy buttons ----------
+function copyBtn(btnId, taId) {
+  $(btnId).addEventListener("click", async () => {
+    $(taId).select();
+    try { await navigator.clipboard.writeText($(taId).value); }
+    catch { document.execCommand("copy"); }
+    const old = $(btnId).textContent; $(btnId).textContent = "คัดลอกแล้ว ✓";
+    setTimeout(() => $(btnId).textContent = old, 1200);
+  });
+}
+copyBtn("copyOffer", "offerOut");
+copyBtn("copyAnswer", "answerOut");
+
+// ---------- โฟลเดอร์ปลายทาง ----------
+if (!window.showDirectoryPicker) {
+  $("fsHint").textContent = "เบราว์เซอร์นี้ไม่รองรับการเลือกโฟลเดอร์ (เช่น Safari) — ไฟล์ที่ได้รับจะถูกดาวน์โหลดแทน และจำกัดขนาดตามหน่วยความจำ";
+  $("pickDir").disabled = true;
+}
+$("pickDir").addEventListener("click", async () => {
+  try {
+    dirHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+    $("destText").textContent = "บันทึกลงโฟลเดอร์: " + dirHandle.name + " (stream ลงดิสก์)";
+  } catch (e) { /* ผู้ใช้ยกเลิก */ }
+});
+
+// ---------- data channel ----------
+function setupChannel(ch) {
+  channel = ch;
+  channel.binaryType = "arraybuffer";
+  channel.bufferedAmountLowThreshold = 256 * 1024;   // ส่งต่อเมื่อระบายเหลือ ≤256KB
+  channel.onopen = () => {
+    setStatus("✅ เชื่อมต่อแล้ว — พร้อมส่งไฟล์", "on");
+    $("drop").classList.remove("off");
+    $("dropText").textContent = "ลากไฟล์มาวางที่นี่ หรือคลิกเพื่อเลือก";
+  };
+  channel.onclose = () => { $("drop").classList.add("off"); setStatus("ปิดการเชื่อมต่อแล้ว", ""); };
+  channel.onmessage = onMessage;
+}
+
+// ---------- ส่งไฟล์ ----------
+const drop = $("drop");
+drop.addEventListener("click", () => $("fileInput").click());
+$("fileInput").addEventListener("change", (e) => queueFiles([...e.target.files]));
+["dragover","dragenter"].forEach(ev => drop.addEventListener(ev, (e) => {
+  e.preventDefault(); drop.classList.add("hot");
+}));
+["dragleave","drop"].forEach(ev => drop.addEventListener(ev, (e) => {
+  e.preventDefault(); drop.classList.remove("hot");
+}));
+drop.addEventListener("drop", (e) => {
+  const files = [...(e.dataTransfer?.files || [])];
+  if (files.length) queueFiles(files);
+});
+
+let sending = false;
+const sendQueue = [];
+function queueFiles(files) {
+  if (!channel || channel.readyState !== "open") { alert("ยังไม่ได้เชื่อมต่อ"); return; }
+  sendQueue.push(...files);
+  pump();
+}
+async function pump() {
+  if (sending) return; sending = true;
+  while (sendQueue.length) { await sendFile(sendQueue.shift()); }
+  sending = false;
+}
+
+function waitDrain() {
+  return new Promise((res) => {
+    const lo = channel.bufferedAmountLowThreshold;
+    if (channel.bufferedAmount <= lo) return res();   // drain ทันแล้ว ไม่ต้องรอ
+    let done = false;
+    const finish = () => {
+      if (done) return; done = true;
+      channel.removeEventListener("bufferedamountlow", h);
+      clearInterval(iv); res();
+    };
+    const h = () => finish();
+    channel.addEventListener("bufferedamountlow", h);
+    // polling สำรอง กัน race: ถ้า event พลาดช่วงที่ buffer ลงต่ำพอดี
+    const iv = setInterval(() => { if (channel.bufferedAmount <= lo) finish(); }, 100);
+  });
+}
+
+async function sendFile(file) {
+  const id = "s" + Math.round(performance.now()) + "-" + file.size;
+  const ui = addXfer(id, "⬆️ " + file.name, file.size);
+  channel.send(JSON.stringify({ kind: "meta", name: file.name, size: file.size, mime: file.type }));
+  let offset = 0, t0 = performance.now();
+  while (offset < file.size) {
+    if (channel.bufferedAmount > HIGH_WATER) await waitDrain();
+    const buf = await file.slice(offset, offset + CHUNK).arrayBuffer();
+    channel.send(buf);
+    offset += buf.byteLength;
+    updateXfer(ui, offset, file.size, t0);
+  }
+  channel.send(JSON.stringify({ kind: "eof", name: file.name }));
+  finishXfer(ui, true);
+}
+
+// ---------- รับไฟล์ ----------
+let incoming = null;
+async function onMessage(e) {
+  if (typeof e.data === "string") {
+    const msg = JSON.parse(e.data);
+    if (msg.kind === "meta") await startIncoming(msg);
+    else if (msg.kind === "eof") await finishIncoming();
+    return;
+  }
+  // binary chunk
+  if (!incoming) return;
+  const chunk = e.data;
+  incoming.received += chunk.byteLength;
+  if (incoming.writer) { await incoming.writer.write(chunk); }
+  else { incoming.parts.push(chunk); }
+  updateXfer(incoming.ui, incoming.received, incoming.meta.size, incoming.t0);
+}
+
+async function startIncoming(meta) {
+  incoming = { meta, received: 0, parts: [], writer: null, t0: performance.now() };
+  incoming.ui = addXfer("r-" + meta.name, "⬇️ " + meta.name, meta.size);
+  if (dirHandle) {
+    try {
+      const fh = await dirHandle.getFileHandle(uniqueName(meta.name), { create: true });
+      incoming.writer = await fh.createWritable();
+    } catch (e) { console.warn("stream ลงดิสก์ไม่ได้ ใช้ memory แทน:", e); }
+  }
+}
+
+const usedNames = new Set();
+function uniqueName(name) {
+  let n = name, i = 1;
+  const dot = name.lastIndexOf(".");
+  const base = dot > 0 ? name.slice(0, dot) : name;
+  const ext = dot > 0 ? name.slice(dot) : "";
+  while (usedNames.has(n)) { n = `${base} (${i++})${ext}`; }
+  usedNames.add(n); return n;
+}
+
+async function finishIncoming() {
+  if (!incoming) return;
+  if (incoming.writer) {
+    await incoming.writer.close();
+  } else {
+    // ดาวน์โหลดผ่านเบราว์เซอร์ (fallback)
+    const blob = new Blob(incoming.parts, { type: incoming.meta.mime || "application/octet-stream" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = incoming.meta.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  }
+  finishXfer(incoming.ui, true);
+  incoming = null;
+}
+
+// ---------- UI การถ่ายโอน ----------
+function addXfer(id, label, size) {
+  const el = document.createElement("div");
+  el.className = "xfer";
+  el.innerHTML = `<div class="top"><span class="lbl"></span><span class="pct">0%</span></div>
+    <div class="bar"><div></div></div>
+    <div class="hint spd"></div>`;
+  el.querySelector(".lbl").textContent = label + " · " + fmtBytes(size);
+  $("xfers").prepend(el);
+  return el;
+}
+function updateXfer(el, done, total, t0) {
+  const pct = total ? Math.min(100, Math.round(done / total * 100)) : 0;
+  el.querySelector(".bar > div").style.width = pct + "%";
+  el.querySelector(".pct").textContent = pct + "%";
+  const secs = (performance.now() - t0) / 1000;
+  if (secs > 0.3) el.querySelector(".spd").textContent = fmtBytes(done / secs) + "/s";
+}
+function finishXfer(el, ok) {
+  el.querySelector(".bar").classList.add(ok ? "done" : "fail");
+  el.querySelector(".bar > div").style.width = "100%";
+  el.querySelector(".pct").textContent = ok ? "เสร็จ ✓" : "ล้มเหลว";
+}
+</script>
+</body>
+</html>
