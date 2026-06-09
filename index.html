@@ -67,6 +67,17 @@
   details.help .body ol { margin: 6px 0; padding-left: 20px; } details.help .body li { margin: 4px 0; }
   details.help .body b { color: var(--text); }
   details.help .body .tip { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .qrbox { margin-top: 10px; text-align: center; }
+  .qrbox canvas { background: #fff; padding: 10px; border-radius: 8px; image-rendering: pixelated; }
+  .qrcap { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .scanModal { position: fixed; inset: 0; background: rgba(0,0,0,.75); display: flex;
+    align-items: center; justify-content: center; z-index: 50; }
+  .scanModal.hidden { display: none; }   /* เจาะจงกว่า .scanModal เพื่อให้ซ่อนได้จริง */
+  .scanBox { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 18px; width: min(92vw, 380px); text-align: center; }
+  .scanTitle { font-weight: 600; margin-bottom: 10px; }
+  #scanVideo { width: 100%; border-radius: 10px; background: #000; aspect-ratio: 1; object-fit: cover; }
+  .scanMsg { font-size: 13px; color: var(--muted); margin: 10px 0; }
 </style>
 </head>
 <body>
@@ -114,9 +125,11 @@
     <div class="row"><button id="btnCreateOffer">สร้างรหัสของฉัน</button>
       <button class="ghost" id="copyOffer" disabled>คัดลอก</button></div>
     <textarea id="offerOut" placeholder="รหัสของคุณจะปรากฏที่นี่…" readonly></textarea>
+    <div class="qrbox hidden" id="offerQR"></div>
     <p class="step" style="margin-top:14px"><b>ขั้น 2:</b> วางรหัสตอบกลับจากเครื่อง B แล้วกดเชื่อมต่อ</p>
     <textarea id="answerIn" placeholder="วางรหัสตอบกลับจากเครื่อง B ที่นี่…"></textarea>
-    <div class="row" style="margin-top:8px"><button id="btnAcceptAnswer" disabled>เชื่อมต่อ</button></div>
+    <div class="row" style="margin-top:8px"><button id="btnAcceptAnswer" disabled>เชื่อมต่อ</button>
+      <button class="ghost" data-scan="answerIn">📷 สแกน QR</button></div>
   </div>
 
   <!-- ขั้นตอน B -->
@@ -124,10 +137,12 @@
     <h2>2 · เชื่อมต่อ (เครื่อง B)</h2>
     <p class="step"><b>ขั้น 1:</b> วางรหัสจากเครื่อง A แล้วกดสร้างรหัสตอบกลับ</p>
     <textarea id="offerIn" placeholder="วางรหัสจากเครื่อง A ที่นี่…"></textarea>
-    <div class="row" style="margin-top:8px"><button id="btnCreateAnswer">สร้างรหัสตอบกลับ</button></div>
+    <div class="row" style="margin-top:8px"><button id="btnCreateAnswer">สร้างรหัสตอบกลับ</button>
+      <button class="ghost" data-scan="offerIn">📷 สแกน QR</button></div>
     <p class="step" style="margin-top:14px"><b>ขั้น 2:</b> ส่งรหัสตอบกลับนี้กลับไปให้เครื่อง A</p>
     <div class="row"><button class="ghost" id="copyAnswer" disabled>คัดลอก</button></div>
     <textarea id="answerOut" placeholder="รหัสตอบกลับจะปรากฏที่นี่…" readonly></textarea>
+    <div class="qrbox hidden" id="answerQR"></div>
   </div>
 
   <!-- สถานะ -->
@@ -161,13 +176,31 @@
     ทั้งสองเครื่องต้องอยู่ Wi-Fi/LAN เดียวกัน · ไม่ต้องมี internet</p>
 </div>
 
+<!-- โมดัลสแกน QR ด้วยกล้อง -->
+<div id="scanModal" class="scanModal hidden">
+  <div class="scanBox">
+    <div class="scanTitle">สแกน QR จากอีกเครื่อง</div>
+    <video id="scanVideo" playsinline muted></video>
+    <canvas id="scanCanvas" class="hidden"></canvas>
+    <div class="scanMsg" id="scanMsg">กำลังเปิดกล้อง…</div>
+    <button class="ghost" id="scanCancel">ยกเลิก</button>
+  </div>
+</div>
+
+<script src="lib/qrcode.min.js"></script>
+<script src="lib/jsQR.min.js"></script>
 <script>
 "use strict";
 
 // ---------- helpers ----------
 const $ = (id) => document.getElementById(id);
 const enc = (obj) => btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
-const dec = (str) => JSON.parse(decodeURIComponent(escape(atob(str.trim()))));
+// รับได้ทั้ง JSON ตรงๆ (จากการสแกน QR) และ base64 (จากการคัดลอก-วาง)
+const dec = (str) => {
+  str = str.trim();
+  try { return JSON.parse(str); } catch (e) { /* ไม่ใช่ JSON ลองแบบ base64 */ }
+  return JSON.parse(decodeURIComponent(escape(atob(str))));
+};
 const fmtBytes = (n) => {
   if (n < 1024) return n + " B";
   const u = ["KB","MB","GB","TB"]; let i = -1;
@@ -234,6 +267,7 @@ $("btnCreateOffer").addEventListener("click", async () => {
   setStatus("รอแลกรหัสกับเครื่อง B…", "wait");
   await waitIceComplete();
   $("offerOut").value = enc(pc.localDescription);
+  showQR("offerQR", JSON.stringify(pc.localDescription));
   $("copyOffer").disabled = false;
   $("btnAcceptAnswer").disabled = false;
   $("btnCreateOffer").disabled = true;
@@ -258,6 +292,7 @@ $("btnCreateAnswer").addEventListener("click", async () => {
     setStatus("รอเครื่อง A เชื่อมต่อ…", "wait");
     await waitIceComplete();
     $("answerOut").value = enc(pc.localDescription);
+    showQR("answerQR", JSON.stringify(pc.localDescription));
     $("copyAnswer").disabled = false;
     $("btnCreateAnswer").disabled = true;
   } catch (e) { alert("รหัสจากเครื่อง A ไม่ถูกต้อง: " + e.message); }
@@ -275,6 +310,78 @@ function copyBtn(btnId, taId) {
 }
 copyBtn("copyOffer", "offerOut");
 copyBtn("copyAnswer", "answerOut");
+
+// ---------- QR: สร้าง ----------
+function showQR(containerId, text) {
+  const el = $(containerId);
+  let qr;
+  try { qr = qrcode(0, "L"); qr.addData(text, "Byte"); qr.make(); }
+  catch (e) { el.classList.add("hidden"); console.warn("สร้าง QR ไม่ได้ (รหัสยาวเกิน) ใช้คัดลอกแทน:", e); return; }
+  const n = qr.getModuleCount(), margin = 4, total = n + margin * 2;
+  const scale = Math.max(2, Math.floor(240 / total));
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = total * scale;
+  const ctx = cv.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = "#000";
+  for (let r = 0; r < n; r++)
+    for (let c = 0; c < n; c++)
+      if (qr.isDark(r, c)) ctx.fillRect((c + margin) * scale, (r + margin) * scale, scale, scale);
+  el.innerHTML = "";
+  el.appendChild(cv);
+  const cap = document.createElement("div");
+  cap.className = "qrcap";
+  cap.textContent = 'ให้อีกเครื่องกด "📷 สแกน QR" แล้วส่องรหัสนี้';
+  el.appendChild(cap);
+  el.classList.remove("hidden");
+}
+
+// ---------- QR: สแกนด้วยกล้อง ----------
+let scanStream = null, scanRAF = null, scanTarget = null;
+document.querySelectorAll("[data-scan]").forEach((btn) =>
+  btn.addEventListener("click", () => startScan(btn.dataset.scan)));
+$("scanCancel").addEventListener("click", stopScan);
+
+async function startScan(targetId) {
+  scanTarget = targetId;
+  $("scanModal").classList.remove("hidden");
+  $("scanMsg").textContent = "กำลังเปิดกล้อง…";
+  try {
+    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+  } catch (e) {
+    $("scanMsg").textContent = "เปิดกล้องไม่ได้: " + e.message + " (ต้องเปิดผ่าน https)";
+    return;
+  }
+  const v = $("scanVideo");
+  v.srcObject = scanStream;
+  await v.play();
+  $("scanMsg").textContent = "เล็ง QR ให้อยู่ในกรอบ…";
+  const cv = $("scanCanvas"), ctx = cv.getContext("2d", { willReadFrequently: true });
+  const tick = () => {
+    if (!scanStream) return;
+    if (v.readyState >= v.HAVE_ENOUGH_DATA) {
+      cv.width = v.videoWidth; cv.height = v.videoHeight;
+      ctx.drawImage(v, 0, 0, cv.width, cv.height);
+      const img = ctx.getImageData(0, 0, cv.width, cv.height);
+      const res = jsQR(img.data, img.width, img.height, { inversionAttempts: "dontInvert" });
+      if (res && res.data) {
+        $(scanTarget).value = res.data;
+        $("scanMsg").textContent = "✅ สแกนสำเร็จ";
+        stopScan();
+        return;
+      }
+    }
+    scanRAF = requestAnimationFrame(tick);
+  };
+  scanRAF = requestAnimationFrame(tick);
+}
+
+function stopScan() {
+  if (scanRAF) { cancelAnimationFrame(scanRAF); scanRAF = null; }
+  if (scanStream) { scanStream.getTracks().forEach((t) => t.stop()); scanStream = null; }
+  $("scanVideo").srcObject = null;
+  setTimeout(() => $("scanModal").classList.add("hidden"), 400);
+}
 
 // ---------- โฟลเดอร์ปลายทาง ----------
 if (!window.showDirectoryPicker) {
