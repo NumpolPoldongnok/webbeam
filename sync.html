@@ -41,6 +41,14 @@
   .toggle input{width:16px; height:16px;}
   .stats{display:flex; gap:18px; font-size:13px; color:var(--muted); margin-top:4px;}
   .stats b{color:var(--text);}
+  .prog{margin-top:12px;} .prog.hidden{display:none !important;}
+  .progHead{display:flex; justify-content:space-between; gap:10px; font-size:12px; color:var(--muted); margin-bottom:5px;}
+  .progHead .txt{overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .progHead .pct{flex:none; color:var(--text); font-variant-numeric:tabular-nums;}
+  .progTrack{height:6px; background:var(--card2); border-radius:4px; overflow:hidden;}
+  .progTrack>div{height:100%; width:0; background:var(--accent); border-radius:4px; transition:width .12s linear;}
+  .progTrack.indet>div{width:35% !important; animation:indet 1.1s ease-in-out infinite;}
+  @keyframes indet{0%{margin-left:-35%}100%{margin-left:100%}}
   #log{font-family:ui-monospace,monospace; font-size:12px; max-height:300px; overflow-y:auto; margin-top:4px;}
   .le{padding:3px 6px; border-radius:5px; display:flex; gap:8px; align-items:baseline;}
   .le .t{color:var(--muted); flex:none;}
@@ -120,6 +128,10 @@
       <span>ส่งออก: <b id="statUp">0</b></span>
       <span>รับเข้า: <b id="statDown">0</b></span>
       <span>conflict: <b id="statConf">0</b></span>
+    </div>
+    <div id="progress" class="prog hidden">
+      <div class="progHead"><span class="txt" id="progText"></span><span class="pct" id="progPct"></span></div>
+      <div class="progTrack" id="progTrack"><div id="progFill"></div></div>
     </div>
   </div>
 
@@ -271,6 +283,19 @@ function refreshStats(fileCount) {
   $("statUp").textContent = nUp; $("statDown").textContent = nDown; $("statConf").textContent = nConf;
 }
 
+// แถบ progress รวม — setProgress(text, frac):
+//   frac เป็นเลข 0..1 = แสดง %  ·  frac = null = แถบวิ่ง (ไม่รู้ความยาว)  ·  text = null = ซ่อน
+let progHideTimer = null;
+function setProgress(text, frac) {
+  const p = $("progress");
+  if (text == null) { clearTimeout(progHideTimer); progHideTimer = setTimeout(() => p.classList.add("hidden"), 700); return; }
+  clearTimeout(progHideTimer); p.classList.remove("hidden");
+  $("progText").textContent = text;
+  if (frac == null) { $("progTrack").classList.add("indet"); $("progFill").style.width = ""; $("progPct").textContent = ""; }
+  else { $("progTrack").classList.remove("indet"); const pct = Math.max(0, Math.min(100, Math.round(frac * 100)));
+    $("progFill").style.width = pct + "%"; $("progPct").textContent = pct + "%"; }
+}
+
 // ================= storage abstraction =================
 // store: { list()->[{path,size,mtime}], read(path)->Blob, write(path,Blob)->void }
 let store = null;
@@ -328,8 +353,17 @@ async function hashOf(entry) {
 }
 async function buildManifest() {
   const list = await store.list();
-  const files = [];
-  for (const e of list) files.push({ path: e.path, size: e.size, mtime: e.mtime, hash: await hashOf(e) });
+  // นับเฉพาะไฟล์ที่ต้องคำนวณ hash ใหม่ (ที่เหลือใช้ cache) เพื่อไม่ให้แถบกระพริบทุกรอบ auto-sync
+  const need = list.filter(e => { const c = hashCache.get(e.path); return !(c && c.size === e.size && c.mtime === e.mtime); });
+  const showProg = need.length > 3;
+  const files = []; let done = 0;
+  for (const e of list) {
+    const c = hashCache.get(e.path);
+    if (!(c && c.size === e.size && c.mtime === e.mtime) && showProg)
+      setProgress("🔎 ตรวจไฟล์ " + (++done) + "/" + need.length + " · " + e.path.split("/").pop(), done / need.length);
+    files.push({ path: e.path, size: e.size, mtime: e.mtime, hash: await hashOf(e) });
+  }
+  if (showProg) setProgress(null);
   refreshStats(files.length);
   return files;
 }
@@ -347,11 +381,15 @@ const pushQueue = []; let pushing = false;
 function enqueuePush(items) { pushQueue.push(...items); runPush(); }
 async function runPush() {
   if (pushing) return; pushing = true;
+  let idx = 0;
   while (pushQueue.length) {
+    idx++;
     const { f, conflict } = pushQueue.shift();
-    try { await pushFile(f, conflict); } catch (e) { logLine("err", "ส่งพลาด", f.path + " (" + e.message + ")"); }
+    const label = "📤 (" + idx + "/" + (idx + pushQueue.length) + ") ";
+    try { await pushFile(f, conflict, label); } catch (e) { logLine("err", "ส่งพลาด", f.path + " (" + e.message + ")"); }
   }
   pushing = false;
+  setProgress(null);
 }
 function waitDrain() {
   return new Promise((res) => {
@@ -360,13 +398,17 @@ function waitDrain() {
     const h = () => fin(); channel.addEventListener("bufferedamountlow", h); const iv = setInterval(() => { if (channel.bufferedAmount <= lo) fin(); }, 100);
   });
 }
-async function pushFile(f, conflict) {
+async function pushFile(f, conflict, label) {
+  label = label || "📤 ";
   const blob = await store.read(f.path);
+  const name = f.path.split("/").pop();
   channel.send(JSON.stringify({ t: "fstart", path: f.path, size: blob.size, hash: f.hash, conflict: !!conflict, sender: myName || "peer" }));
   let off = 0;
+  setProgress(label + "ส่ง " + name, blob.size ? 0 : 1);
   while (off < blob.size) {
     if (channel.bufferedAmount > HIGH_WATER) await waitDrain();
     const buf = await blob.slice(off, off + CHUNK).arrayBuffer(); channel.send(buf); off += buf.byteLength;
+    setProgress(label + "ส่ง " + name, off / blob.size);
   }
   channel.send(JSON.stringify({ t: "fend" }));
   nUp++; refreshStats();
@@ -413,11 +455,14 @@ async function onMessage(e) {
     if (m.t === "hello") { peerName = m.name || "อีกเครื่อง"; onConnected(); }
     else if (m.t === "nofolder") logLine("err", "อีกเครื่องยังไม่ได้เลือกโฟลเดอร์", "— ให้ " + peerName + " กด \"เลือกโฟลเดอร์…\"");
     else if (m.t === "manifest") await onPeerManifest(m.files);
-    else if (m.t === "fstart") incoming = { meta: m, parts: [], received: 0 };
+    else if (m.t === "fstart") { incoming = { meta: m, parts: [], received: 0 };
+      setProgress("📥 รับ " + m.path.split("/").pop(), m.size ? 0 : null); }
     else if (m.t === "fend") await applyIncoming();
     return;
   }
-  if (incoming) { incoming.parts.push(e.data); incoming.received += e.data.byteLength; }
+  if (incoming) { incoming.parts.push(e.data); incoming.received += e.data.byteLength;
+    const sz = incoming.meta.size;
+    setProgress("📥 รับ " + incoming.meta.path.split("/").pop(), sz ? incoming.received / sz : null); }
 }
 async function applyIncoming() {
   const inc = incoming; incoming = null; if (!inc || !store) return;
@@ -443,6 +488,7 @@ async function applyIncoming() {
     if (target === meta.path) { lastSync[meta.path] = meta.hash; saveLastSync(); }
     else { /* conflict file ใหม่ จะถูก sync เป็นไฟล์ใหม่รอบถัดไป */ }
   } catch (e) { logLine("err", "เขียนพลาด", meta.path + " (" + e.message + ")"); }
+  finally { setProgress(null); }
 }
 
 // ---- จังหวะ sync ----
