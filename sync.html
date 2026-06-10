@@ -377,7 +377,7 @@ async function pushFile(f, conflict) {
 // ---- คำนวณว่าฉันต้อง push อะไรบ้าง เมื่อได้ manifest ของ peer ----
 let syncBusy = false, pendingResync = false;
 async function onPeerManifest(remoteFiles) {
-  if (!store) return;
+  if (!store) { try { channel.send(JSON.stringify({ t: "nofolder" })); } catch {} return; }
   if (syncBusy) { pendingResync = true; return; }
   syncBusy = true;
   try {
@@ -400,7 +400,7 @@ async function onPeerManifest(remoteFiles) {
       }
     }
     saveLastSync();
-    if (toSend.length) enqueuePush(toSend);
+    if (toSend.length) { logLine("up", "เทียบแล้ว ส่งให้ " + peerName, toSend.length + " ไฟล์"); enqueuePush(toSend); }
   } finally {
     syncBusy = false;
     if (pendingResync) { pendingResync = false; }
@@ -413,6 +413,7 @@ async function onMessage(e) {
   if (typeof e.data === "string") {
     let m; try { m = JSON.parse(e.data); } catch { return; }
     if (m.t === "hello") { peerName = m.name || "อีกเครื่อง"; onConnected(); }
+    else if (m.t === "nofolder") logLine("err", "อีกเครื่องยังไม่ได้เลือกโฟลเดอร์", "— ให้ " + peerName + " กด \"เลือกโฟลเดอร์…\"");
     else if (m.t === "manifest") await onPeerManifest(m.files);
     else if (m.t === "fstart") incoming = { meta: m, parts: [], received: 0 };
     else if (m.t === "fend") await applyIncoming();
@@ -447,20 +448,24 @@ async function applyIncoming() {
 }
 
 // ---- จังหวะ sync ----
-function requestSync() {
-  if (!channel || channel.readyState !== "open" || !store) return;
-  buildManifest().then(files => { if (channel && channel.readyState === "open") channel.send(JSON.stringify({ t: "manifest", files })); });
+function requestSync(manual) {
+  if (!channel || channel.readyState !== "open") { if (manual) logLine("err", "ซิงค์ไม่ได้", "ยังไม่เชื่อมต่ออีกเครื่อง"); return; }
+  if (!store) { if (manual) logLine("err", "ซิงค์ไม่ได้", "ยังไม่ได้เลือกโฟลเดอร์ (กด \"เลือกโฟลเดอร์…\")"); return; }
+  buildManifest().then(files => {
+    if (channel && channel.readyState === "open") channel.send(JSON.stringify({ t: "manifest", files }));
+    if (manual) logLine("info", "🔄 ขอซิงค์", "เทียบ " + files.length + " ไฟล์กับ " + peerName + "…");
+  });
 }
 let autoTimer = null;
 function scheduleAuto() {
   clearInterval(autoTimer);
   if (!$("autoSync").checked) return;
   const sec = Math.max(2, Math.min(120, parseInt($("interval").value) || 5));
-  autoTimer = setInterval(requestSync, sec * 1000);
+  autoTimer = setInterval(() => requestSync(false), sec * 1000);
 }
 $("autoSync").addEventListener("change", scheduleAuto);
 $("interval").addEventListener("change", scheduleAuto);
-$("syncNow").addEventListener("click", requestSync);
+$("syncNow").addEventListener("click", () => requestSync(true));
 
 // ---- เลือกโฟลเดอร์ ----
 if (!window.showDirectoryPicker) {
