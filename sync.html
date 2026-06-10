@@ -103,8 +103,8 @@
       <span class="hint" id="folderText">ยังไม่เลือก</span>
     </div>
     <p class="hint" id="fsWarn" style="margin-top:8px"></p>
-    <p class="hint" style="margin-top:6px">ข้าม: <code>.DS_Store</code>, <code>.git</code>, <code>node_modules</code> ·
-      ไม่ลบไฟล์ข้ามเครื่อง · แก้ชนกัน → เก็บทั้งสอง (<code>.conflict-ชื่อ</code>)</p>
+    <p class="hint" style="margin-top:6px">รวมไฟล์ให้ครบทั้งสองเครื่อง (union) · ข้าม <code>.DS_Store</code>, <code>.git</code>, <code>node_modules</code> ·
+      ลบไม่ข้ามเครื่อง (ไฟล์ที่ยังมีอีกฝั่งจะถูกดึงกลับ) · แก้ชนกัน → เก็บทั้งสอง (<code>.conflict-ชื่อ</code>)</p>
   </div>
 
   <!-- ควบคุม sync -->
@@ -387,9 +387,7 @@ async function onPeerManifest(remoteFiles) {
     for (const f of local) {
       const r = rmap[f.path], lastH = lastSync[f.path];
       if (!r) {
-        if (lastH === undefined) toSend.push({ f });                 // ไฟล์ใหม่ → ส่งให้ (เพิ่ม)
-        else if (lastH !== f.hash) toSend.push({ f });               // เราแก้หลัง sync แต่ peer ไม่มี → ส่งของเรา
-        // else: เคย sync แล้ว peer ลบ → ไม่ส่งกลับ (เคารพการลบ ไม่ดึงคืน)
+        toSend.push({ f });                                          // peer ไม่มีไฟล์นี้ → ส่งให้เสมอ (รวมไฟล์ให้ครบ ไม่เดาว่าถูกลบ)
       } else if (r.hash !== f.hash) {
         const localChanged = lastH !== f.hash, remoteChanged = lastH !== r.hash;
         if (localChanged && remoteChanged) { toSend.push({ f, conflict: true }); lastSync[f.path] = f.hash; } // ชน → ส่งของเราเป็น conflict แล้วถือว่าจบ

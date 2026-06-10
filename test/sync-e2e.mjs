@@ -85,6 +85,15 @@ try {
   log('  transfer delta หลังนิ่งแล้ว: A=' + deltaA + ' B=' + deltaB);
   chk(deltaA===0 && deltaB===0, 'ไม่มีการส่งซ้ำหลัง converge (ไม่ ping-pong)');
 
-  log('\n' + (fail ? '❌ มีข้อผิดพลาด' : '✅ PASS ทุกเคส: เพิ่มสองทาง + อัปเดต + conflict เก็บทั้งสอง + ไม่ ping-pong'));
+  // ===== Phase 5: regression — เครื่องว่างต่อกับเครื่องที่ lastSync ค้างอยู่ =====
+  log('\n[Phase 5] เครื่องว่างเปล่าต่อเครื่องที่เคย sync (regression บั๊กที่ผู้ใช้เจอ)');
+  await pb.evaluate(()=>SYNC.initMem({}, 'mem2'));   // B โฟลเดอร์ใหม่ ว่างเปล่า
+  await settle(10);
+  db = await dumpB();
+  chk(Object.keys(db).length > 0, 'B (ว่างเปล่า) ได้รับไฟล์จาก A แม้ A มี lastSync ค้าง (' + Object.keys(db).length + ' ไฟล์)');
+  chk(db['a.txt']==='AAA', 'B ได้ a.txt');
+  chk(db['sub/x.js']==='console.log(1)', 'B ได้ subfolder');
+
+  log('\n' + (fail ? '❌ มีข้อผิดพลาด' : '✅ PASS ทุกเคส: เพิ่มสองทาง + อัปเดต + conflict + ไม่ ping-pong + เครื่องว่างได้ไฟล์ครบ'));
 } catch (e) { console.log('error:', e.message, e.stack); fail = true; }
 finally { await A.close(); await B.close(); process.exitCode = fail ? 1 : 0; }
