@@ -353,14 +353,14 @@ async function hashOf(entry) {
 }
 async function buildManifest() {
   const list = await store.list();
-  // นับเฉพาะไฟล์ที่ต้องคำนวณ hash ใหม่ (ที่เหลือใช้ cache) เพื่อไม่ให้แถบกระพริบทุกรอบ auto-sync
+  // แสดงแถบเฉพาะตอนมีไฟล์ต้องคำนวณ hash ใหม่ > 3 (ที่เหลือใช้ cache) เพื่อไม่ให้กระพริบทุกรอบ auto-sync
   const need = list.filter(e => { const c = hashCache.get(e.path); return !(c && c.size === e.size && c.mtime === e.mtime); });
   const showProg = need.length > 3;
-  const files = []; let done = 0;
-  for (const e of list) {
-    const c = hashCache.get(e.path);
-    if (!(c && c.size === e.size && c.mtime === e.mtime) && showProg)
-      setProgress("🔎 ตรวจไฟล์ " + (++done) + "/" + need.length + " · " + e.path.split("/").pop(), done / need.length);
+  const total = list.length;
+  const files = [];
+  for (let i = 0; i < total; i++) {
+    const e = list[i];
+    if (showProg) setProgress("🔎 ตรวจไฟล์ " + (i + 1) + "/" + total + " · " + e.path.split("/").pop(), (i + 1) / total);
     files.push({ path: e.path, size: e.size, mtime: e.mtime, hash: await hashOf(e) });
   }
   if (showProg) setProgress(null);
