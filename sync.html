@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebBeam Sync — ซิงค์โฟลเดอร์ offline P2P ระหว่าง 2 เครื่อง</title>
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --card2:#22262f; --line:#2c313c; --text:#e8eaed;
+    --muted:#9aa0aa; --accent:#4f8cff; --green:#34c759; --red:#ff453a; --orange:#ff9f0a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+    background:var(--bg); color:var(--text); line-height:1.5; }
+  .wrap { max-width:820px; margin:0 auto; padding:20px 18px 50px; }
+  header { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+  header h1 { font-size:20px; margin:0; }
+  .status { display:flex; align-items:center; gap:7px; font-size:13px; color:var(--muted); margin-left:auto; }
+  .dot { width:9px; height:9px; border-radius:50%; background:#555; flex:none; }
+  .dot.on{background:var(--green);} .dot.wait{background:var(--orange);}
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:12px; }
+  .card h2 { font-size:13px; margin:0 0 10px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.4px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:9px; padding:8px 14px; font-size:14px; font-weight:600; cursor:pointer; }
+  button:hover{filter:brightness(1.08);} button:disabled{opacity:.4; cursor:not-allowed;}
+  button.ghost{background:var(--card2); color:var(--text); border:1px solid var(--line);}
+  button.sm{padding:5px 10px; font-size:12px; font-weight:500;}
+  input[type=text]{background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:9px; padding:8px 11px; font-size:14px;}
+  input[type=number]{width:64px; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:9px; padding:6px 8px;}
+  textarea{width:100%; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:9px; padding:9px 11px; font-family:ui-monospace,monospace; font-size:12px; resize:vertical; min-height:56px; margin-top:8px;}
+  .seg{display:inline-flex; background:var(--card2); border-radius:10px; padding:3px; gap:3px;}
+  .seg button{background:transparent; color:var(--muted); padding:6px 14px; font-size:13px;}
+  .seg button.on{background:var(--accent); color:#fff;}
+  .hint{font-size:12px; color:var(--muted);} .hidden{display:none !important;} a{color:var(--accent);}
+  .step{font-size:13px; color:var(--muted); margin:0 0 6px;} .step b{color:var(--text);}
+  details.conn>summary{cursor:pointer; list-style:none; font-size:13px; color:var(--muted); padding:9px 13px; background:var(--card); border:1px solid var(--line); border-radius:10px;}
+  details.conn>summary::-webkit-details-marker{display:none;}
+  details.conn>summary::before{content:"▸ "; color:var(--accent);} details.conn[open]>summary::before{content:"▾ ";}
+  details.conn{margin-bottom:12px;} details.conn .panel{margin-top:10px;}
+  .qrbox{margin-top:10px; text-align:center;} .qrbox canvas{background:#fff; padding:10px; border-radius:8px; image-rendering:pixelated;}
+  .qrcap{font-size:11px; color:var(--muted); margin-top:4px;}
+  .toggle{display:inline-flex; align-items:center; gap:7px; font-size:13px; cursor:pointer;}
+  .toggle input{width:16px; height:16px;}
+  .stats{display:flex; gap:18px; font-size:13px; color:var(--muted); margin-top:4px;}
+  .stats b{color:var(--text);}
+  #log{font-family:ui-monospace,monospace; font-size:12px; max-height:300px; overflow-y:auto; margin-top:4px;}
+  .le{padding:3px 6px; border-radius:5px; display:flex; gap:8px; align-items:baseline;}
+  .le .t{color:var(--muted); flex:none;}
+  .le.up .a{color:#7fd1ff;} .le.down .a{color:#8ee68a;} .le.conf .a{color:var(--orange);} .le.err .a{color:var(--red);}
+  .le .p{word-break:break-all;}
+  .scanModal{position:fixed; inset:0; background:rgba(0,0,0,.75); display:flex; align-items:center; justify-content:center; z-index:50;}
+  .scanModal.hidden{display:none !important;}
+  .scanBox{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; width:min(92vw,380px); text-align:center;}
+  #scanVideo{width:100%; border-radius:10px; background:#000; aspect-ratio:1; object-fit:cover;}
+  .scanMsg{font-size:13px; color:var(--muted); margin:10px 0;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🔄 WebBeam Sync</h1>
+    <div class="status"><span class="dot" id="dot"></span><span id="status">ยังไม่เชื่อมต่อ</span></div>
+  </header>
+  <p class="hint" style="margin-top:-6px">ซิงค์โฟลเดอร์สองทางระหว่าง 2 เครื่องบน LAN (P2P, offline) · Chrome/Edge เท่านั้น ·
+    <a href="index.html">→ ไปหน้าแชต</a></p>
+
+  <!-- การเชื่อมต่อ -->
+  <details class="conn" id="connPanel" open>
+    <summary id="connSummary">⚙️ การเชื่อมต่อ (เปิดทั้งสองเครื่อง · LAN เดียวกัน)</summary>
+    <div class="panel"><div class="card">
+      <div class="row" style="margin-bottom:10px">
+        <span class="hint">ชื่อเครื่อง</span>
+        <input type="text" id="myName" placeholder="เช่น MacA" style="flex:1; min-width:120px">
+      </div>
+      <div class="seg" id="roleSeg">
+        <button data-role="a" class="on">เริ่ม (A)</button>
+        <button data-role="b">เข้าร่วม (B)</button>
+      </div>
+      <div id="panelA" style="margin-top:12px">
+        <p class="step"><b>1.</b> สร้างรหัส → ส่งให้ B</p>
+        <div class="row"><button id="btnCreateOffer">สร้างรหัสของฉัน</button><button class="ghost" id="copyOffer" disabled>คัดลอก</button></div>
+        <textarea id="offerOut" placeholder="รหัสของคุณ…" readonly></textarea>
+        <div class="qrbox hidden" id="offerQR"></div>
+        <p class="step" style="margin-top:12px"><b>2.</b> วางรหัสตอบกลับจาก B → เชื่อมต่อ</p>
+        <textarea id="answerIn" placeholder="วางรหัสตอบกลับจาก B…"></textarea>
+        <div class="row" style="margin-top:8px"><button id="btnAcceptAnswer" disabled>เชื่อมต่อ</button><button class="ghost" data-scan="answerIn">📷 สแกน QR</button></div>
+      </div>
+      <div id="panelB" class="hidden" style="margin-top:12px">
+        <p class="step"><b>1.</b> วางรหัสจาก A → สร้างรหัสตอบกลับ</p>
+        <textarea id="offerIn" placeholder="วางรหัสจาก A…"></textarea>
+        <div class="row" style="margin-top:8px"><button id="btnCreateAnswer">สร้างรหัสตอบกลับ</button><button class="ghost" data-scan="offerIn">📷 สแกน QR</button></div>
+        <p class="step" style="margin-top:12px"><b>2.</b> ส่งรหัสตอบกลับนี้ให้ A</p>
+        <div class="row"><button class="ghost" id="copyAnswer" disabled>คัดลอก</button></div>
+        <textarea id="answerOut" placeholder="รหัสตอบกลับ…" readonly></textarea>
+        <div class="qrbox hidden" id="answerQR"></div>
+      </div>
+    </div></div>
+  </details>
+
+  <!-- โฟลเดอร์ -->
+  <div class="card">
+    <h2>โฟลเดอร์ที่จะซิงค์</h2>
+    <div class="row">
+      <button class="ghost" id="pickFolder">เลือกโฟลเดอร์…</button>
+      <span class="hint" id="folderText">ยังไม่เลือก</span>
+    </div>
+    <p class="hint" id="fsWarn" style="margin-top:8px"></p>
+    <p class="hint" style="margin-top:6px">ข้าม: <code>.DS_Store</code>, <code>.git</code>, <code>node_modules</code> ·
+      ไม่ลบไฟล์ข้ามเครื่อง · แก้ชนกัน → เก็บทั้งสอง (<code>.conflict-ชื่อ</code>)</p>
+  </div>
+
+  <!-- ควบคุม sync -->
+  <div class="card">
+    <h2>การซิงค์</h2>
+    <div class="row">
+      <button id="syncNow" disabled>🔄 Sync ตอนนี้</button>
+      <label class="toggle"><input type="checkbox" id="autoSync" checked> auto ทุก</label>
+      <input type="number" id="interval" value="5" min="2" max="120"> <span class="hint">วินาที</span>
+    </div>
+    <div class="stats">
+      <span>ไฟล์ในโฟลเดอร์: <b id="statFiles">–</b></span>
+      <span>ส่งออก: <b id="statUp">0</b></span>
+      <span>รับเข้า: <b id="statDown">0</b></span>
+      <span>conflict: <b id="statConf">0</b></span>
+    </div>
+  </div>
+
+  <!-- log -->
+  <div class="card">
+    <h2>บันทึก</h2>
+    <div id="log"></div>
+  </div>
+</div>
+
+<div id="scanModal" class="scanModal hidden"><div class="scanBox">
+  <div style="font-weight:600; margin-bottom:10px">สแกน QR จากอีกเครื่อง</div>
+  <video id="scanVideo" playsinline muted></video><canvas id="scanCanvas" class="hidden"></canvas>
+  <div class="scanMsg" id="scanMsg">กำลังเปิดกล้อง…</div>
+  <button class="ghost" id="scanCancel">ยกเลิก</button>
+</div></div>
+
+<script src="lib/qrcode.min.js"></script>
+<script src="lib/jsQR.min.js"></script>
+<script>
+"use strict";
+// ================= helpers =================
+const $ = (id) => document.getElementById(id);
+const enc = (o) => btoa(unescape(encodeURIComponent(JSON.stringify(o))));
+const dec = (s) => { s = s.trim(); try { return JSON.parse(s); } catch (e) {} return JSON.parse(decodeURIComponent(escape(atob(s)))); };
+const fmtTime = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const CHUNK = 64 * 1024, HIGH_WATER = 4 * 1024 * 1024;
+const IGNORE_TOP = new Set([".DS_Store", ".git", "node_modules", ".svn", ".hg"]);
+
+let pc = null, channel = null, role = "a";
+let myName = localStorage.getItem("webbeam.syncname") || "";
+let peerName = "อีกเครื่อง";
+
+async function sha256(buf) {
+  const h = await crypto.subtle.digest("SHA-256", buf);
+  return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// ================= name =================
+$("myName").value = myName;
+$("myName").addEventListener("input", () => { myName = $("myName").value.trim(); localStorage.setItem("webbeam.syncname", myName); });
+
+// ================= status =================
+function setStatus(t, s) { $("status").textContent = t; $("dot").className = "dot" + (s ? " " + s : ""); }
+function onConnected() {
+  setStatus("🟢 เชื่อมต่อกับ " + peerName, "on");
+  $("connPanel").open = false;
+  $("connSummary").textContent = "🟢 เชื่อมต่อกับ " + peerName;
+  if (store) $("syncNow").disabled = false;
+  scheduleAuto();
+  requestSync();
+}
+function onDisconnected(r) { setStatus(r || "หลุดการเชื่อมต่อ", ""); $("syncNow").disabled = true; }
+
+// ================= role =================
+$("roleSeg").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  role = b.dataset.role;
+  [...$("roleSeg").children].forEach(x => x.classList.toggle("on", x === b));
+  $("panelA").classList.toggle("hidden", role !== "a");
+  $("panelB").classList.toggle("hidden", role !== "b");
+});
+
+// ================= WebRTC (เหมือน chat ที่พิสูจน์แล้ว) =================
+function newPeer() {
+  pc = new RTCPeerConnection({ iceServers: [] });
+  pc.onconnectionstatechange = () => {
+    const s = pc.connectionState;
+    if (s === "connecting") setStatus("⏳ กำลังเชื่อมต่อ…", "wait");
+    else if (["failed", "disconnected", "closed"].includes(s)) onDisconnected("การเชื่อมต่อหลุด (" + s + ")");
+  };
+  pc.ondatachannel = (e) => setupChannel(e.channel);
+}
+function waitIceComplete() {
+  return new Promise((res) => {
+    if (pc.iceGatheringState === "complete") return res();
+    const c = () => { if (pc.iceGatheringState === "complete") { pc.removeEventListener("icegatheringstatechange", c); res(); } };
+    pc.addEventListener("icegatheringstatechange", c); setTimeout(res, 3000);
+  });
+}
+$("btnCreateOffer").addEventListener("click", async () => {
+  newPeer(); setupChannel(pc.createDataChannel("sync", { ordered: true }));
+  await pc.setLocalDescription(await pc.createOffer());
+  setStatus("รอแลกรหัส…", "wait"); await waitIceComplete();
+  $("offerOut").value = enc(pc.localDescription); showQR("offerQR", JSON.stringify(pc.localDescription));
+  $("copyOffer").disabled = false; $("btnAcceptAnswer").disabled = false; $("btnCreateOffer").disabled = true;
+});
+$("btnAcceptAnswer").addEventListener("click", async () => {
+  try { await pc.setRemoteDescription(dec($("answerIn").value)); setStatus("⏳ กำลังเชื่อมต่อ…", "wait"); }
+  catch (e) { alert("รหัสไม่ถูกต้อง: " + e.message); }
+});
+$("btnCreateAnswer").addEventListener("click", async () => {
+  try {
+    newPeer(); await pc.setRemoteDescription(dec($("offerIn").value));
+    await pc.setLocalDescription(await pc.createAnswer());
+    setStatus("รอ A เชื่อมต่อ…", "wait"); await waitIceComplete();
+    $("answerOut").value = enc(pc.localDescription); showQR("answerQR", JSON.stringify(pc.localDescription));
+    $("copyAnswer").disabled = false; $("btnCreateAnswer").disabled = true;
+  } catch (e) { alert("รหัสไม่ถูกต้อง: " + e.message); }
+});
+function copyBtn(b, t) { $(b).addEventListener("click", async () => { $(t).select(); try { await navigator.clipboard.writeText($(t).value); } catch {} const o = $(b).textContent; $(b).textContent = "คัดลอก ✓"; setTimeout(() => $(b).textContent = o, 1200); }); }
+copyBtn("copyOffer", "offerOut"); copyBtn("copyAnswer", "answerOut");
+function showQR(id, text) {
+  const el = $(id); let qr;
+  try { qr = qrcode(0, "L"); qr.addData(text, "Byte"); qr.make(); } catch (e) { el.classList.add("hidden"); return; }
+  const n = qr.getModuleCount(), m = 4, tot = n + m * 2, sc = Math.max(2, Math.floor(240 / tot));
+  const cv = document.createElement("canvas"); cv.width = cv.height = tot * sc; const x = cv.getContext("2d");
+  x.fillStyle = "#fff"; x.fillRect(0, 0, cv.width, cv.height); x.fillStyle = "#000";
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) x.fillRect((c + m) * sc, (r + m) * sc, sc, sc);
+  el.innerHTML = ""; el.appendChild(cv); const cap = document.createElement("div"); cap.className = "qrcap"; cap.textContent = 'ให้อีกเครื่องสแกน'; el.appendChild(cap); el.classList.remove("hidden");
+}
+let scanStream = null, scanRAF = null, scanTarget = null;
+document.querySelectorAll("[data-scan]").forEach((b) => b.addEventListener("click", () => startScan(b.dataset.scan)));
+$("scanCancel").addEventListener("click", stopScan);
+async function startScan(t) {
+  scanTarget = t; $("scanModal").classList.remove("hidden"); $("scanMsg").textContent = "กำลังเปิดกล้อง…";
+  try { scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }); }
+  catch (e) { $("scanMsg").textContent = "เปิดกล้องไม่ได้: " + e.message; return; }
+  const v = $("scanVideo"); v.srcObject = scanStream; await v.play(); $("scanMsg").textContent = "เล็ง QR…";
+  const cv = $("scanCanvas"), x = cv.getContext("2d", { willReadFrequently: true });
+  const tick = () => { if (!scanStream) return;
+    if (v.readyState >= v.HAVE_ENOUGH_DATA) { cv.width = v.videoWidth; cv.height = v.videoHeight; x.drawImage(v, 0, 0, cv.width, cv.height);
+      const im = x.getImageData(0, 0, cv.width, cv.height); const r = jsQR(im.data, im.width, im.height, { inversionAttempts: "dontInvert" });
+      if (r && r.data) { $(scanTarget).value = r.data; stopScan(); return; } }
+    scanRAF = requestAnimationFrame(tick); };
+  scanRAF = requestAnimationFrame(tick);
+}
+function stopScan() { if (scanRAF) cancelAnimationFrame(scanRAF); scanRAF = null;
+  if (scanStream) scanStream.getTracks().forEach(t => t.stop()); scanStream = null; $("scanVideo").srcObject = null;
+  setTimeout(() => $("scanModal").classList.add("hidden"), 300); }
+
+function setupChannel(ch) {
+  channel = ch; channel.binaryType = "arraybuffer"; channel.bufferedAmountLowThreshold = 256 * 1024;
+  channel.onopen = () => { channel.send(JSON.stringify({ t: "hello", name: myName || "ไม่ระบุ" })); onConnected(); };
+  channel.onclose = () => onDisconnected("ปิดการเชื่อมต่อ");
+  channel.onmessage = onMessage;
+}
+
+// ================= log + stats =================
+let nUp = 0, nDown = 0, nConf = 0;
+function logLine(kind, action, path) {
+  const el = document.createElement("div"); el.className = "le " + kind;
+  el.innerHTML = `<span class="t">${fmtTime()}</span><span class="a">${action}</span><span class="p"></span>`;
+  el.querySelector(".p").textContent = path;
+  const L = $("log"); L.prepend(el); while (L.children.length > 200) L.lastChild.remove();
+}
+function refreshStats(fileCount) {
+  if (fileCount != null) $("statFiles").textContent = fileCount;
+  $("statUp").textContent = nUp; $("statDown").textContent = nDown; $("statConf").textContent = nConf;
+}
+
+// ================= storage abstraction =================
+// store: { list()->[{path,size,mtime}], read(path)->Blob, write(path,Blob)->void }
+let store = null;
+
+function fsStore(rootHandle) {
+  async function walk(dir, base, out) {
+    for await (const [name, h] of dir.entries()) {
+      if (base === "" && IGNORE_TOP.has(name)) continue;
+      if (name === ".DS_Store") continue;
+      const path = base ? base + "/" + name : name;
+      if (h.kind === "file") { const f = await h.getFile(); out.push({ path, size: f.size, mtime: f.lastModified }); }
+      else if (h.kind === "directory") await walk(h, path, out);
+    }
+  }
+  async function navTo(path, create) {
+    const parts = path.split("/"); let dir = rootHandle;
+    for (let i = 0; i < parts.length - 1; i++) dir = await dir.getDirectoryHandle(parts[i], { create });
+    return { dir, name: parts[parts.length - 1] };
+  }
+  return {
+    async list() { const out = []; await walk(rootHandle, "", out); return out; },
+    async read(path) { const { dir, name } = await navTo(path, false); const fh = await dir.getFileHandle(name); return await fh.getFile(); },
+    async write(path, blob) { const { dir, name } = await navTo(path, true); const fh = await dir.getFileHandle(name, { create: true }); const w = await fh.createWritable(); await w.write(blob); await w.close(); },
+  };
+}
+
+// in-memory store (สำหรับทดสอบ)
+function memStore(initial) {
+  const files = new Map(); // path -> {bytes:Uint8Array, mtime}
+  let clock = 1000;
+  if (initial) for (const p in initial) { const v = initial[p]; files.set(p, { bytes: new TextEncoder().encode(typeof v === "string" ? v : v.text), mtime: (v.mtime || ++clock) }); }
+  return {
+    _files: files,
+    async list() { return [...files].map(([path, f]) => ({ path, size: f.bytes.byteLength, mtime: f.mtime })); },
+    async read(path) { const f = files.get(path); if (!f) throw new Error("no file"); return new Blob([f.bytes]); },
+    async write(path, blob) { const buf = new Uint8Array(await blob.arrayBuffer()); files.set(path, { bytes: buf, mtime: ++clock }); },
+    dump() { const o = {}; for (const [p, f] of files) o[p] = new TextDecoder().decode(f.bytes); return o; },
+  };
+}
+
+// ================= sync engine =================
+const hashCache = new Map();        // path -> {size,mtime,hash}
+let lastSync = {};                  // path -> hash ที่ตกลงกันล่าสุด
+let lastSyncKey = "webbeam.sync.lastsync";
+function loadLastSync(folderId) { lastSyncKey = "webbeam.sync." + (folderId || "mem"); try { lastSync = JSON.parse(localStorage.getItem(lastSyncKey) || "{}"); } catch { lastSync = {}; } }
+function saveLastSync() { try { localStorage.setItem(lastSyncKey, JSON.stringify(lastSync)); } catch {} }
+
+async function hashOf(entry) {
+  const c = hashCache.get(entry.path);
+  if (c && c.size === entry.size && c.mtime === entry.mtime) return c.hash;
+  const blob = await store.read(entry.path);
+  const hash = await sha256(await blob.arrayBuffer());
+  hashCache.set(entry.path, { size: entry.size, mtime: entry.mtime, hash });
+  return hash;
+}
+async function buildManifest() {
+  const list = await store.list();
+  const files = [];
+  for (const e of list) files.push({ path: e.path, size: e.size, mtime: e.mtime, hash: await hashOf(e) });
+  refreshStats(files.length);
+  return files;
+}
+function conflictName(path, who) {
+  const slash = path.lastIndexOf("/"); const dir = slash >= 0 ? path.slice(0, slash + 1) : ""; const base = path.slice(slash + 1);
+  const dot = base.lastIndexOf("."); const stem = dot > 0 ? base.slice(0, dot) : base; const ext = dot > 0 ? base.slice(dot) : "";
+  return dir + stem + ".conflict-" + (who || "peer").replace(/[^\w.-]/g, "") + ext;
+}
+async function currentHash(path) {
+  try { const blob = await store.read(path); return await sha256(await blob.arrayBuffer()); } catch { return null; }
+}
+
+// ---- ส่งไฟล์ที่ต้อง push ----
+const pushQueue = []; let pushing = false;
+function enqueuePush(items) { pushQueue.push(...items); runPush(); }
+async function runPush() {
+  if (pushing) return; pushing = true;
+  while (pushQueue.length) {
+    const { f, conflict } = pushQueue.shift();
+    try { await pushFile(f, conflict); } catch (e) { logLine("err", "ส่งพลาด", f.path + " (" + e.message + ")"); }
+  }
+  pushing = false;
+}
+function waitDrain() {
+  return new Promise((res) => {
+    const lo = channel.bufferedAmountLowThreshold; if (channel.bufferedAmount <= lo) return res();
+    let done = false; const fin = () => { if (done) return; done = true; channel.removeEventListener("bufferedamountlow", h); clearInterval(iv); res(); };
+    const h = () => fin(); channel.addEventListener("bufferedamountlow", h); const iv = setInterval(() => { if (channel.bufferedAmount <= lo) fin(); }, 100);
+  });
+}
+async function pushFile(f, conflict) {
+  const blob = await store.read(f.path);
+  channel.send(JSON.stringify({ t: "fstart", path: f.path, size: blob.size, hash: f.hash, conflict: !!conflict, sender: myName || "peer" }));
+  let off = 0;
+  while (off < blob.size) {
+    if (channel.bufferedAmount > HIGH_WATER) await waitDrain();
+    const buf = await blob.slice(off, off + CHUNK).arrayBuffer(); channel.send(buf); off += buf.byteLength;
+  }
+  channel.send(JSON.stringify({ t: "fend" }));
+  nUp++; refreshStats();
+  logLine(conflict ? "conf" : "up", conflict ? "→ ส่ง(ชน)" : "→ ส่ง", f.path);
+  lastSync[f.path] = f.hash; saveLastSync();   // หมายเหตุ: ถือว่า peer รับแล้ว
+}
+
+// ---- คำนวณว่าฉันต้อง push อะไรบ้าง เมื่อได้ manifest ของ peer ----
+let syncBusy = false, pendingResync = false;
+async function onPeerManifest(remoteFiles) {
+  if (!store) return;
+  if (syncBusy) { pendingResync = true; return; }
+  syncBusy = true;
+  try {
+    const local = await buildManifest();
+    const rmap = {}; for (const r of remoteFiles) rmap[r.path] = r;
+    const toSend = [];
+    for (const f of local) {
+      const r = rmap[f.path], lastH = lastSync[f.path];
+      if (!r) {
+        if (lastH === undefined) toSend.push({ f });                 // ไฟล์ใหม่ → ส่งให้ (เพิ่ม)
+        else if (lastH !== f.hash) toSend.push({ f });               // เราแก้หลัง sync แต่ peer ไม่มี → ส่งของเรา
+        // else: เคย sync แล้ว peer ลบ → ไม่ส่งกลับ (เคารพการลบ ไม่ดึงคืน)
+      } else if (r.hash !== f.hash) {
+        const localChanged = lastH !== f.hash, remoteChanged = lastH !== r.hash;
+        if (localChanged && remoteChanged) { toSend.push({ f, conflict: true }); lastSync[f.path] = f.hash; } // ชน → ส่งของเราเป็น conflict แล้วถือว่าจบ
+        else if (localChanged && !remoteChanged) toSend.push({ f });  // เราใหม่กว่า → ส่ง
+        // else: มีแต่ peer เปลี่ยน → peer จะ push มาให้เราเอง
+      } else {
+        if (lastH !== f.hash) lastSync[f.path] = f.hash;              // เท่ากันแล้ว → mark synced
+      }
+    }
+    saveLastSync();
+    if (toSend.length) enqueuePush(toSend);
+  } finally {
+    syncBusy = false;
+    if (pendingResync) { pendingResync = false; }
+  }
+}
+
+// ---- รับไฟล์ + apply ----
+let incoming = null;
+async function onMessage(e) {
+  if (typeof e.data === "string") {
+    let m; try { m = JSON.parse(e.data); } catch { return; }
+    if (m.t === "hello") { peerName = m.name || "อีกเครื่อง"; onConnected(); }
+    else if (m.t === "manifest") await onPeerManifest(m.files);
+    else if (m.t === "fstart") incoming = { meta: m, parts: [], received: 0 };
+    else if (m.t === "fend") await applyIncoming();
+    return;
+  }
+  if (incoming) { incoming.parts.push(e.data); incoming.received += e.data.byteLength; }
+}
+async function applyIncoming() {
+  const inc = incoming; incoming = null; if (!inc || !store) return;
+  const meta = inc.meta;
+  const blob = new Blob(inc.parts);
+  try {
+    const localHash = await currentHash(meta.path);
+    let asConflict = !!meta.conflict, target = meta.path;
+    // safety: ถ้าเราก็แก้ไฟล์นี้เอง (ต่างจาก lastSync และต่างจากที่รับมา) → กันทับ เก็บเป็น conflict
+    if (!asConflict && localHash != null && localHash !== meta.hash) {
+      const lastH = lastSync[meta.path];
+      if (localHash !== lastH) asConflict = true;
+    }
+    if (asConflict && localHash != null) {
+      target = conflictName(meta.path, meta.sender || peerName);
+      nConf++; logLine("conf", "← ชน เก็บเป็น", target);
+    } else {
+      logLine("down", "← รับ", target);
+    }
+    await store.write(target, blob);
+    hashCache.delete(target);
+    nDown++; refreshStats();
+    if (target === meta.path) { lastSync[meta.path] = meta.hash; saveLastSync(); }
+    else { /* conflict file ใหม่ จะถูก sync เป็นไฟล์ใหม่รอบถัดไป */ }
+  } catch (e) { logLine("err", "เขียนพลาด", meta.path + " (" + e.message + ")"); }
+}
+
+// ---- จังหวะ sync ----
+function requestSync() {
+  if (!channel || channel.readyState !== "open" || !store) return;
+  buildManifest().then(files => { if (channel && channel.readyState === "open") channel.send(JSON.stringify({ t: "manifest", files })); });
+}
+let autoTimer = null;
+function scheduleAuto() {
+  clearInterval(autoTimer);
+  if (!$("autoSync").checked) return;
+  const sec = Math.max(2, Math.min(120, parseInt($("interval").value) || 5));
+  autoTimer = setInterval(requestSync, sec * 1000);
+}
+$("autoSync").addEventListener("change", scheduleAuto);
+$("interval").addEventListener("change", scheduleAuto);
+$("syncNow").addEventListener("click", requestSync);
+
+// ---- เลือกโฟลเดอร์ ----
+if (!window.showDirectoryPicker) {
+  $("fsWarn").innerHTML = "⚠️ เบราว์เซอร์นี้ไม่รองรับการเลือกโฟลเดอร์ (เช่น Safari) — ต้องใช้ <b>Chrome/Edge</b>";
+  $("pickFolder").disabled = true;
+}
+$("pickFolder").addEventListener("click", async () => {
+  try {
+    const h = await window.showDirectoryPicker({ mode: "readwrite" });
+    store = fsStore(h);
+    loadLastSync(h.name);
+    hashCache.clear();
+    $("folderText").textContent = "📁 " + h.name;
+    if (channel && channel.readyState === "open") $("syncNow").disabled = false;
+    await buildManifest();
+    requestSync();
+    logLine("up", "เลือกโฟลเดอร์", h.name);
+  } catch (e) { /* ยกเลิก */ }
+});
+
+// ================= test hooks (ใช้ตอนทดสอบ headless) =================
+window.SYNC = {
+  initMem(files, name) { store = memStore(files); loadLastSync(name || "mem"); hashCache.clear(); lastSync = {}; saveLastSync(); buildManifest(); },
+  put(path, text) { return store.write(path, new Blob([text])); },
+  syncNow: requestSync,
+  dump: () => store && store.dump ? store.dump() : null,
+  stats: () => ({ up: nUp, down: nDown, conf: nConf, busy: syncBusy || pushing || pushQueue.length > 0 }),
+  channelOpen: () => channel && channel.readyState === "open",
+};
+</script>
+</body>
+</html>
