@@ -135,23 +135,21 @@
       <span class="hint" id="folderText">ยังไม่เลือก</span>
     </div>
     <p class="hint" id="fsWarn" style="margin-top:8px"></p>
-    <p class="hint" style="margin-top:6px">รวมไฟล์ให้ครบทั้งสองเครื่อง (union) · ข้าม <code>.DS_Store</code>, <code>.git</code>, <code>node_modules</code> ·
-      ลบไม่ข้ามเครื่อง (ไฟล์ที่ยังมีอีกฝั่งจะถูกดึงกลับ) · แก้ชนกัน → เก็บทั้งสอง (<code>.conflict-ชื่อ</code>)</p>
+    <p class="hint" style="margin-top:6px">โหมด: กด "ดึงทั้งหมดมาแทนที่" = เขียนทับไฟล์ในเครื่องนี้ด้วยของอีกเครื่อง (ทางเดียว ไม่เช็ค) ·
+      ไฟล์ที่อีกเครื่องไม่มีจะไม่ถูกลบ · ข้าม <code>.DS_Store</code>, <code>.git</code>, <code>node_modules</code></p>
   </div>
 
   <!-- ควบคุม sync -->
   <div class="card">
-    <h2>การซิงค์</h2>
+    <h2>ซิงค์ (ดึงมาแทนที่)</h2>
     <div class="row">
-      <button id="syncNow" disabled>🔄 Sync ตอนนี้</button>
-      <label class="toggle"><input type="checkbox" id="autoSync" checked> auto ทุก</label>
-      <input type="number" id="interval" value="5" min="2" max="120"> <span class="hint">วินาที</span>
+      <button id="syncNow" disabled>⬇️ ดึงทั้งหมดมาแทนที่</button>
+      <span class="hint" style="flex:1; min-width:220px">กด = ดึงไฟล์ทั้งหมดจากอีกเครื่องมาเขียนทับในโฟลเดอร์นี้ (ทางเดียว ไม่ hash → เร็ว)</span>
     </div>
     <div class="stats">
       <span>ไฟล์ในโฟลเดอร์: <b id="statFiles">–</b></span>
       <span>ส่งออก: <b id="statUp">0</b></span>
       <span>รับเข้า: <b id="statDown">0</b></span>
-      <span>conflict: <b id="statConf">0</b></span>
     </div>
     <div id="progress" class="prog hidden">
       <div class="progHead"><span class="txt" id="progText"></span><span class="pct" id="progPct"></span></div>
@@ -206,8 +204,6 @@ function onConnected() {
   $("connPanel").open = false;
   $("connSummary").textContent = "🟢 เชื่อมต่อกับ " + peerName;
   if (store) $("syncNow").disabled = false;
-  scheduleAuto();
-  requestSync();
 }
 function onDisconnected(r) { setStatus(r || "หลุดการเชื่อมต่อ", ""); $("syncNow").disabled = true; }
 
@@ -404,7 +400,7 @@ function logLine(kind, action, path) {
 }
 function refreshStats(fileCount) {
   if (fileCount != null) $("statFiles").textContent = fileCount;
-  $("statUp").textContent = nUp; $("statDown").textContent = nDown; $("statConf").textContent = nConf;
+  $("statUp").textContent = nUp; $("statDown").textContent = nDown;
 }
 
 // แถบ progress รวม — setProgress(text, frac):
@@ -571,69 +567,67 @@ async function onPeerManifest(remoteFiles) {
   }
 }
 
-// ---- รับไฟล์ + apply ----
-let incoming = null;
+// ---- รับไฟล์: เขียนทับทันที (ไม่ hash ไม่เช็ค) ----
+let incoming = null, pullGot = 0;
 async function onMessage(e) {
   if (typeof e.data === "string") {
     let m; try { m = JSON.parse(e.data); } catch { return; }
     if (m.t === "hello") { peerName = m.name || "อีกเครื่อง"; onConnected(); }
-    else if (m.t === "nofolder") logLine("err", "อีกเครื่องยังไม่ได้เลือกโฟลเดอร์", "— ให้ " + peerName + " กด \"เลือกโฟลเดอร์…\"");
-    else if (m.t === "manifest") await onPeerManifest(m.files);
-    else if (m.t === "fstart") { incoming = { meta: m, parts: [], received: 0 };
-      setProgress("📥 รับ " + m.path.split("/").pop(), m.size ? 0 : null); }
+    else if (m.t === "nofolder") { logLine("err", "อีกเครื่องยังไม่ได้เลือกโฟลเดอร์", "— ให้ " + peerName + " กด \"เลือกโฟลเดอร์…\""); setProgress(null); }
+    else if (m.t === "pullall") sendAllFiles();           // อีกเครื่องขอ → ส่งทั้งหมดให้
+    else if (m.t === "fstart") { incoming = { meta: m, parts: [], received: 0 }; setProgress("📥 รับ " + m.path.split("/").pop(), m.size ? 0 : null); }
     else if (m.t === "fend") await applyIncoming();
+    else if (m.t === "pulldone") { logLine("down", "✅ ดึงเสร็จจาก " + peerName, "แทนที่ " + pullGot + " ไฟล์"); pullGot = 0; setProgress(null); }
     return;
   }
   if (incoming) { incoming.parts.push(e.data); incoming.received += e.data.byteLength;
-    const sz = incoming.meta.size;
-    setProgress("📥 รับ " + incoming.meta.path.split("/").pop(), sz ? incoming.received / sz : null); }
+    const sz = incoming.meta.size; setProgress("📥 รับ " + incoming.meta.path.split("/").pop(), sz ? incoming.received / sz : null); }
 }
 async function applyIncoming() {
   const inc = incoming; incoming = null; if (!inc || !store) return;
-  const meta = inc.meta;
-  const blob = new Blob(inc.parts);
   try {
-    const localHash = await currentHash(meta.path);
-    let asConflict = !!meta.conflict, target = meta.path;
-    // safety: ถ้าเราก็แก้ไฟล์นี้เอง (ต่างจาก lastSync และต่างจากที่รับมา) → กันทับ เก็บเป็น conflict
-    if (!asConflict && localHash != null && localHash !== meta.hash) {
-      const lastH = lastSync[meta.path];
-      if (localHash !== lastH) asConflict = true;
-    }
-    if (asConflict && localHash != null) {
-      target = conflictName(meta.path, meta.sender || peerName);
-      nConf++; logLine("conf", "← ชน เก็บเป็น", target);
-    } else {
-      logLine("down", "← รับ", target);
-    }
-    await store.write(target, blob);
-    hashCache.delete(target);
-    nDown++; refreshStats();
-    if (target === meta.path) { lastSync[meta.path] = meta.hash; saveLastSync(); }
-    else { /* conflict file ใหม่ จะถูก sync เป็นไฟล์ใหม่รอบถัดไป */ }
-  } catch (e) { logLine("err", "เขียนพลาด", meta.path + " (" + e.message + ")"); }
-  finally { setProgress(null); }
+    await store.write(inc.meta.path, new Blob(inc.parts));   // เขียนทับทันที ไม่เช็คอะไร
+    nDown++; pullGot++; refreshStats();
+    logLine("down", "← แทนที่", inc.meta.path);
+  } catch (e) { logLine("err", "เขียนพลาด", inc.meta.path + " (" + e.message + ")"); }
 }
 
-// ---- จังหวะ sync ----
-function requestSync(manual) {
-  if (!channel || channel.readyState !== "open") { if (manual) logLine("err", "ซิงค์ไม่ได้", "ยังไม่เชื่อมต่ออีกเครื่อง"); return; }
-  if (!store) { if (manual) logLine("err", "ซิงค์ไม่ได้", "ยังไม่ได้เลือกโฟลเดอร์ (กด \"เลือกโฟลเดอร์…\")"); return; }
-  buildManifest().then(files => {
-    if (channel && channel.readyState === "open") channel.send(JSON.stringify({ t: "manifest", files }));
-    if (manual) logLine("info", "🔄 ขอซิงค์", "เทียบ " + files.length + " ไฟล์กับ " + peerName + "…");
-  });
+// ---- กดปุ่ม = ขอดึงไฟล์ทั้งหมดจากอีกเครื่องมาแทนที่ ----
+function pullAll() {
+  if (!channel || channel.readyState !== "open") { logLine("err", "ดึงไม่ได้", "ยังไม่เชื่อมต่ออีกเครื่อง"); return; }
+  if (!store) { logLine("err", "ดึงไม่ได้", "ยังไม่ได้เลือกโฟลเดอร์"); return; }
+  logLine("info", "⬇️ ขอดึงไฟล์ทั้งหมดจาก " + peerName, "กำลังรอ…");
+  setProgress("รอ " + peerName + " ส่งไฟล์…", null);
+  channel.send(JSON.stringify({ t: "pullall" }));
 }
-let autoTimer = null;
-function scheduleAuto() {
-  clearInterval(autoTimer);
-  if (!$("autoSync").checked) return;
-  const sec = Math.max(2, Math.min(120, parseInt($("interval").value) || 5));
-  autoTimer = setInterval(() => requestSync(false), sec * 1000);
+// ---- อีกฝั่งถูกขอ → ส่งไฟล์ทั้งหมด (ไม่ hash) ----
+let sendingAll = false;
+async function sendAllFiles() {
+  if (!store) { try { channel.send(JSON.stringify({ t: "nofolder" })); } catch {} return; }
+  if (sendingAll) return; sendingAll = true;
+  try {
+    const list = await store.list();
+    refreshStats(list.length);
+    logLine("up", "ส่งไฟล์ทั้งหมดให้ " + peerName, list.length + " ไฟล์");
+    for (let i = 0; i < list.length; i++) await pushRaw(list[i].path, i + 1, list.length);
+    channel.send(JSON.stringify({ t: "pulldone" }));
+  } catch (e) { logLine("err", "ส่งพลาด", e.message); }
+  finally { sendingAll = false; setProgress(null); }
 }
-$("autoSync").addEventListener("change", scheduleAuto);
-$("interval").addEventListener("change", scheduleAuto);
-$("syncNow").addEventListener("click", () => requestSync(true));
+async function pushRaw(path, idx, total) {
+  const blob = await store.read(path);
+  const name = path.split("/").pop();
+  channel.send(JSON.stringify({ t: "fstart", path, size: blob.size }));
+  let off = 0; setProgress("📤 (" + idx + "/" + total + ") ส่ง " + name, blob.size ? 0 : 1);
+  while (off < blob.size) {
+    if (channel.bufferedAmount > HIGH_WATER) await waitDrain();
+    const buf = await blob.slice(off, off + CHUNK).arrayBuffer(); channel.send(buf); off += buf.byteLength;
+    setProgress("📤 (" + idx + "/" + total + ") ส่ง " + name, off / blob.size);
+  }
+  channel.send(JSON.stringify({ t: "fend" }));
+  nUp++; refreshStats();
+}
+$("syncNow").addEventListener("click", pullAll);
 
 // ---- เลือกโฟลเดอร์ ----
 if (!window.showDirectoryPicker) {
@@ -644,24 +638,21 @@ $("pickFolder").addEventListener("click", async () => {
   try {
     const h = await window.showDirectoryPicker({ mode: "readwrite" });
     store = fsStore(h);
-    loadLastSync(h.name);
-    hashCache.clear();
     $("folderText").textContent = "📁 " + h.name;
     if (channel && channel.readyState === "open") $("syncNow").disabled = false;
-    await buildManifest();
-    requestSync();
-    logLine("up", "เลือกโฟลเดอร์", h.name);
+    const n = (await store.list()).length; refreshStats(n);
+    logLine("up", "เลือกโฟลเดอร์", h.name + " (" + n + " ไฟล์)");
   } catch (e) { /* ยกเลิก */ }
 });
 
 // ================= test hooks (ใช้ตอนทดสอบ headless) =================
 window.SYNC = {
-  initMem(files, name) { store = memStore(files); loadLastSync(name || "mem"); hashCache.clear(); lastSync = {}; saveLastSync(); buildManifest(); },
+  initMem(files) { store = memStore(files); },
   put(path, text) { return store.write(path, new Blob([text])); },
   connectRoom: (c) => connectRoom(c),
-  syncNow: requestSync,
+  pullAll: pullAll,
   dump: () => store && store.dump ? store.dump() : null,
-  stats: () => ({ up: nUp, down: nDown, conf: nConf, busy: syncBusy || pushing || pushQueue.length > 0 }),
+  stats: () => ({ up: nUp, down: nDown, busy: sendingAll }),
   channelOpen: () => channel && channel.readyState === "open",
 };
 </script>
