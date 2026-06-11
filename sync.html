@@ -131,6 +131,11 @@
         <textarea id="answerOut" placeholder="รหัสตอบกลับ…" readonly></textarea>
         <div class="qrbox hidden" id="answerQR"></div>
       </div>
+      <div class="row" style="margin-top:12px">
+        <label class="toggle"><input type="checkbox" id="useStun"> ลองใช้ STUN ถ้าต่อ local ไม่ติด (ตอนจับคู่ใช้เน็ต ช่วยกรณีคอนโดบล็อก mDNS)</label>
+      </div>
+      <p class="hint" style="margin-top:10px">🔧 Debug การเชื่อมต่อ (ดูว่า ICE ติดตรงไหน):</p>
+      <pre id="connDbg" style="max-height:170px; overflow:auto; font-size:11px; background:#0c0e12; color:#9fe0a0; padding:8px; border-radius:8px; white-space:pre-wrap; margin:4px 0 0"></pre>
     </div></div>
   </details>
 
@@ -247,13 +252,43 @@ $("roleSeg").addEventListener("click", (e) => {
 });
 
 // ================= WebRTC (เหมือน chat ที่พิสูจน์แล้ว) =================
+// ---- debug helpers ----
+function dbg(msg) {
+  const el = $("connDbg");
+  if (el) { const d = document.createElement("div"); d.textContent = new Date().toLocaleTimeString([], { minute: "2-digit", second: "2-digit" }) + "  " + msg; el.appendChild(d); el.scrollTop = el.scrollHeight; while (el.children.length > 120) el.firstChild.remove(); }
+  console.log("[ice]", msg);
+}
+function sdpCands(sdp) {
+  const ls = sdp.match(/a=candidate:[^\r\n]*/g) || [];
+  const types = {}; let mdns = 0;
+  ls.forEach(l => { const m = l.match(/ typ (\w+)/); const t = m ? m[1] : "?"; types[t] = (types[t] || 0) + 1; if (/ typ host/.test(l) && /\.local/.test(l)) mdns++; });
+  return "candidates=" + (ls.length ? JSON.stringify(types) : "0") + (mdns ? (" · host เป็น mDNS(.local) " + mdns + " ตัว") : "");
+}
+async function logSelectedPair() {
+  try {
+    const stats = await pc.getStats(); let pair = null;
+    stats.forEach(r => { if (r.type === "candidate-pair" && r.nominated && r.state === "succeeded") pair = r; });
+    if (!pair) stats.forEach(r => { if (r.type === "transport" && r.selectedCandidatePairId) pair = stats.get(r.selectedCandidatePairId); });
+    if (pair) { const L = stats.get(pair.localCandidateId), R = stats.get(pair.remoteCandidateId); dbg("✅ เส้นทางที่ใช้: " + (L ? L.candidateType : "?") + " ↔ " + (R ? R.candidateType : "?")); }
+  } catch (e) {}
+}
+function iceConfig() {
+  return ($("useStun") && $("useStun").checked) ? { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] } : { iceServers: [] };
+}
 function newPeer() {
-  pc = new RTCPeerConnection({ iceServers: [] });
+  pc = new RTCPeerConnection(iceConfig());
+  dbg("— เริ่มต่อใหม่ (" + ($("useStun") && $("useStun").checked ? "STUN on" : "local only") + ") —");
+  pc.onicecandidate = (e) => { if (e.candidate) { const c = e.candidate; dbg("local cand: " + c.type + "/" + c.protocol + " " + (c.address || "?") + ":" + (c.port || "")); } else dbg("local: รวบรวม candidate เสร็จ"); };
+  pc.onicegatheringstatechange = () => dbg("gather: " + pc.iceGatheringState);
+  pc.oniceconnectionstatechange = () => {
+    dbg("ICE: " + pc.iceConnectionState);
+    if (pc.iceConnectionState === "failed") dbg("❌ ICE failed — เครื่องคุยกันตรงไม่ได้ (Wi-Fi คอนโดมัก isolation/บล็อก mDNS) → ลองติ๊ก STUN หรือใช้ hotspot");
+  };
   pc.onconnectionstatechange = () => {
-    const s = pc.connectionState;
+    const s = pc.connectionState; dbg("conn: " + s);
     if (s === "connecting") setStatus("⏳ กำลังเชื่อมต่อ…", "wait");
-    else if (s === "connected") { setStatus("🟢 เชื่อมต่อกับ " + peerName, "on"); }
-    else if (s === "disconnected") { setStatus("⚠️ สัญญาณหลุดชั่วคราว กำลังรอกลับมา…", "wait"); }  // มักกลับมาเองได้ ไม่ต้องแลกรหัสใหม่
+    else if (s === "connected") { setStatus("🟢 เชื่อมต่อกับ " + peerName, "on"); logSelectedPair(); }
+    else if (s === "disconnected") setStatus("⚠️ สัญญาณหลุดชั่วคราว กำลังรอกลับมา…", "wait");
     else if (s === "failed" || s === "closed") onDisconnected("การเชื่อมต่อหลุด (" + s + ") — ต้องแลกรหัสใหม่");
   };
   pc.ondatachannel = (e) => setupChannel(e.channel);
@@ -269,18 +304,20 @@ $("btnCreateOffer").addEventListener("click", async () => {
   newPeer(); setupChannel(pc.createDataChannel("sync", { ordered: true }));
   await pc.setLocalDescription(await pc.createOffer());
   setStatus("รอแลกรหัส…", "wait"); await waitIceComplete();
+  dbg("offer ของฉัน: " + sdpCands(pc.localDescription.sdp));
   $("offerOut").value = enc(pc.localDescription); showQR("offerQR", JSON.stringify(pc.localDescription));
   $("copyOffer").disabled = false; $("btnAcceptAnswer").disabled = false; $("btnCreateOffer").disabled = true;
 });
 $("btnAcceptAnswer").addEventListener("click", async () => {
-  try { await pc.setRemoteDescription(dec($("answerIn").value)); setStatus("⏳ กำลังเชื่อมต่อ…", "wait"); }
+  try { const a = dec($("answerIn").value); dbg("รับ answer จาก B: " + sdpCands(a.sdp)); await pc.setRemoteDescription(a); setStatus("⏳ กำลังเชื่อมต่อ…", "wait"); }
   catch (e) { alert("รหัสไม่ถูกต้อง: " + e.message); }
 });
 $("btnCreateAnswer").addEventListener("click", async () => {
   try {
-    newPeer(); await pc.setRemoteDescription(dec($("offerIn").value));
+    newPeer(); const o = dec($("offerIn").value); dbg("รับ offer จาก A: " + sdpCands(o.sdp)); await pc.setRemoteDescription(o);
     await pc.setLocalDescription(await pc.createAnswer());
     setStatus("รอ A เชื่อมต่อ…", "wait"); await waitIceComplete();
+    dbg("answer ของฉัน: " + sdpCands(pc.localDescription.sdp));
     $("answerOut").value = enc(pc.localDescription); showQR("answerQR", JSON.stringify(pc.localDescription));
     $("copyAnswer").disabled = false; $("btnCreateAnswer").disabled = true;
   } catch (e) { alert("รหัสไม่ถูกต้อง: " + e.message); }
