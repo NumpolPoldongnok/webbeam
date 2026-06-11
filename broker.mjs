@@ -15,6 +15,8 @@ const send = (res, code, body, type) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "content-type");
+  // Chrome Private Network Access: ให้หน้าเว็บ (file/http) fetch มา private IP ได้
+  res.setHeader("Access-Control-Allow-Private-Network", "true");
   res.writeHead(code, type ? { "content-type": type } : undefined);
   res.end(body || "");
 };

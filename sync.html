@@ -805,7 +805,11 @@ async function sendBundle(group, label) {
 
 // ---- รับ: route ตาม kind (sync=เขียนทับโฟลเดอร์, chat=ขึ้นในแชต) ----
 let incoming = null, pullGot = 0, pullTotal = 0;
-async function onMessage(e) {
+// ประมวลผลข้อความแบบเรียงทีละอัน (serialize) — กัน race: pulldone ต้องรอ finishBundle/finishIncoming
+// ของชุดก่อนหน้าให้เขียนไฟล์เสร็จก่อน ไม่งั้น watchdog จะถูก resetWatchdog() ติดใหม่หลังซิงค์จบ → ค้าง
+let recvChain = Promise.resolve();
+function onMessage(e) { recvChain = recvChain.then(() => handleMessage(e)).catch(err => dbg("recv: " + err.message)); }
+async function handleMessage(e) {
   if (typeof e.data === "string") {
     let m; try { m = JSON.parse(e.data); } catch { return; }
     if (m.t === "hello") { peerName = m.name || "อีกเครื่อง"; onConnected(); }
