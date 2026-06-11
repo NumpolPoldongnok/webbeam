@@ -252,7 +252,9 @@ function newPeer() {
   pc.onconnectionstatechange = () => {
     const s = pc.connectionState;
     if (s === "connecting") setStatus("⏳ กำลังเชื่อมต่อ…", "wait");
-    else if (["failed", "disconnected", "closed"].includes(s)) onDisconnected("การเชื่อมต่อหลุด (" + s + ")");
+    else if (s === "connected") { setStatus("🟢 เชื่อมต่อกับ " + peerName, "on"); }
+    else if (s === "disconnected") { setStatus("⚠️ สัญญาณหลุดชั่วคราว กำลังรอกลับมา…", "wait"); }  // มักกลับมาเองได้ ไม่ต้องแลกรหัสใหม่
+    else if (s === "failed" || s === "closed") onDisconnected("การเชื่อมต่อหลุด (" + s + ") — ต้องแลกรหัสใหม่");
   };
   pc.ondatachannel = (e) => setupChannel(e.channel);
 }
@@ -314,10 +316,17 @@ function stopScan() { if (scanRAF) cancelAnimationFrame(scanRAF); scanRAF = null
   if (scanStream) scanStream.getTracks().forEach(t => t.stop()); scanStream = null; $("scanVideo").srcObject = null;
   setTimeout(() => $("scanModal").classList.add("hidden"), 300); }
 
+let keepAliveTimer = null;
 function setupChannel(ch) {
   channel = ch; channel.binaryType = "arraybuffer"; channel.bufferedAmountLowThreshold = 256 * 1024;
-  channel.onopen = () => { channel.send(JSON.stringify({ t: "hello", name: myName || "ไม่ระบุ" })); onConnected(); };
-  channel.onclose = () => onDisconnected("ปิดการเชื่อมต่อ");
+  channel.onopen = () => {
+    channel.send(JSON.stringify({ t: "hello", name: myName || "ไม่ระบุ" }));
+    onConnected();
+    // keep-alive: ส่ง ping ทุก 8 วิ กันการเชื่อมต่อหลุดตอนไม่มีทราฟฟิก (idle)
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = setInterval(() => { try { if (channel && channel.readyState === "open") channel.send(JSON.stringify({ t: "ping" })); } catch {} }, 8000);
+  };
+  channel.onclose = () => { clearInterval(keepAliveTimer); onDisconnected("ปิดการเชื่อมต่อ"); };
   channel.onmessage = onMessage;
 }
 
