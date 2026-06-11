@@ -205,9 +205,8 @@
   <div class="card">
     <h2>ซิงค์ (ดึงมาแทนที่)</h2>
     <div class="row">
-      <button id="syncNow" disabled>⬇️ ดึงเฉพาะที่เปลี่ยน</button>
-      <label class="toggle"><input type="checkbox" id="forceFull"> ดึงใหม่ทั้งหมด</label>
-      <span class="hint" style="flex:1; min-width:180px">ดึงไฟล์จากอีกเครื่องมาแทนที่ — รอบถัดไปส่งเฉพาะไฟล์ที่เปลี่ยน (เร็ว) · ติ๊กถ้าอยากดึงครบทุกไฟล์</span>
+      <button id="syncNow" disabled>⬇️ ดึงทั้งหมดมาแทนที่</button>
+      <span class="hint" style="flex:1; min-width:180px">คัดลอกทุกไฟล์ในโฟลเดอร์ของอีกเครื่องมาเขียนทับในเครื่องนี้ (ทางเดียว) · ไฟล์ที่อีกเครื่องไม่มีจะไม่ถูกลบ</span>
     </div>
     <div class="stats">
       <span>ไฟล์ในโฟลเดอร์: <b id="statFiles">–</b></span>
@@ -874,24 +873,18 @@ async function finishIncoming() {
 
 // ---- ซิงค์: กดปุ่ม = ดึงเฉพาะที่เปลี่ยน (incremental) จากอีกเครื่องมาแทนที่ ----
 let syncWatchdog = null;
-function syncBtnIdle() { $("syncNow").textContent = "⬇️ ดึงเฉพาะที่เปลี่ยน"; $("syncNow").disabled = !(channel && channel.readyState === "open" && store); clearTimeout(syncWatchdog); syncWatchdog = null; }
+function syncBtnIdle() { $("syncNow").textContent = "⬇️ ดึงทั้งหมดมาแทนที่"; $("syncNow").disabled = !(channel && channel.readyState === "open" && store); clearTimeout(syncWatchdog); syncWatchdog = null; }
 function resetWatchdog() { clearTimeout(syncWatchdog); syncWatchdog = setTimeout(() => { logLine("err", "ซิงค์ค้าง", "ไม่ตอบสนอง 60 วิ — หยุด"); syncBtnIdle(); setProgress(null); }, 60000); }
 
 function pullAll() {
   if (!channel || channel.readyState !== "open") { logLine("err", "ดึงไม่ได้", "ยังไม่เชื่อมต่ออีกเครื่อง"); return; }
   if (!store) { logLine("err", "ดึงไม่ได้", "ยังไม่ได้เลือกโฟลเดอร์"); return; }
-  const force = $("forceFull") && $("forceFull").checked;
-  const have = force ? {} : recvIndex;
-  const entries = Object.entries(have);
-  logLine("info", "⬇️ ขอดึงจาก " + peerName, force ? "(ดึงใหม่ทั้งหมด)" : ("มีอยู่ " + entries.length + " ไฟล์ → ขอเฉพาะที่เปลี่ยน"));
+  logLine("info", "⬇️ ขอดึงทั้งหมดจาก " + peerName, "คัดลอกทุกไฟล์ในโฟลเดอร์มาทับ");
   $("syncNow").disabled = true; $("syncNow").textContent = "⏳ กำลังซิงค์…";
   pullTotal = 0; pullGot = 0;
   setProgress("⏳ ขอรายการจาก " + peerName + "…", null);
   resetWatchdog();
-  channel.send(JSON.stringify({ t: "pullbegin" }));
-  const BATCH = 200;   // ส่ง index เป็นชุดละ 200 กันเกิน maxMessageSize
-  for (let i = 0; i < entries.length; i += BATCH) channel.send(JSON.stringify({ t: "haveidx", e: entries.slice(i, i + BATCH) }));
-  channel.send(JSON.stringify({ t: "pullgo" }));
+  channel.send(JSON.stringify({ t: "pullgo" }));   // ไม่ส่ง index → ฝั่งโน้นส่งทุกไฟล์
 }
 let sendingAll = false;
 async function sendAllFiles(have) {
@@ -902,10 +895,9 @@ async function sendAllFiles(have) {
   try {
     const list = await store.list();
     refreshStats(list.length);
-    const toSend = list.filter(e => have[e.path] !== (e.size + ":" + e.mtime));   // ข้ามไฟล์ที่ฝั่งโน้นมีอยู่แล้วและไม่เปลี่ยน
-    skipped = list.length - toSend.length;
+    const toSend = list;                                                          // ส่งทุกไฟล์ในโฟลเดอร์ (copy ทั้งหมด)
     channel.send(JSON.stringify({ t: "pullinfo", total: toSend.length }));        // บอกผู้รับว่าจะส่งกี่ไฟล์ (ทำ progress รวม)
-    logLine("up", "ส่งให้ " + peerName, "ส่ง " + toSend.length + " · ข้าม(ไม่เปลี่ยน) " + skipped);
+    logLine("up", "ส่งให้ " + peerName, "ส่งทั้งหมด " + toSend.length + " ไฟล์");
     // ไฟล์เล็ก → มัดเป็นชุด (เร็วกว่ามาก) · ไฟล์ใหญ่ → ส่งเดี่ยวพร้อม progress ต่อไฟล์
     const SMALL = 256 * 1024, B_BYTES = 8 * 1024 * 1024, B_FILES = 200;
     const smalls = toSend.filter(e => e.size <= SMALL), bigs = toSend.filter(e => e.size > SMALL);
