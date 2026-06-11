@@ -216,7 +216,7 @@ const $ = (id) => document.getElementById(id);
 const enc = (o) => btoa(unescape(encodeURIComponent(JSON.stringify(o))));
 const dec = (s) => { s = s.trim(); try { return JSON.parse(s); } catch (e) {} return JSON.parse(decodeURIComponent(escape(atob(s)))); };
 const fmtTime = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-const CHUNK = 64 * 1024, HIGH_WATER = 4 * 1024 * 1024;
+const CHUNK = 64 * 1024, HIGH_WATER = 8 * 1024 * 1024;
 const IGNORE_TOP = new Set([".DS_Store", ".git", "node_modules", ".svn", ".hg"]);
 
 let pc = null, channel = null, role = "a";
@@ -355,7 +355,7 @@ function stopScan() { if (scanRAF) cancelAnimationFrame(scanRAF); scanRAF = null
 
 let keepAliveTimer = null;
 function setupChannel(ch) {
-  channel = ch; channel.binaryType = "arraybuffer"; channel.bufferedAmountLowThreshold = 256 * 1024;
+  channel = ch; channel.binaryType = "arraybuffer"; channel.bufferedAmountLowThreshold = 1024 * 1024;
   channel.onopen = () => {
     channel.send(JSON.stringify({ t: "hello", name: myName || "ไม่ระบุ" }));
     onConnected();
@@ -548,16 +548,26 @@ async function onPeerManifest(remoteFiles) {
 let _sendBusy = false; const _sendWaiters = [];
 async function sendLock() { if (!_sendBusy) { _sendBusy = true; return; } await new Promise(r => _sendWaiters.push(r)); }
 function sendUnlock() { const w = _sendWaiters.shift(); if (w) w(); else _sendBusy = false; }
+// chunk ใหญ่สุดเท่าที่ data channel รับได้ (เร็วขึ้น) · บีบอัด gzip ไฟล์ข้อความ
+function bestChunk() { const max = (pc && pc.sctp && pc.sctp.maxMessageSize) || 65536; return Math.max(16384, Math.min(256 * 1024, max)); }
+function gzOK() { return typeof CompressionStream !== "undefined" && typeof DecompressionStream !== "undefined"; }
+async function gzipBlob(b) { return await new Response(b.stream().pipeThrough(new CompressionStream("gzip"))).blob(); }
+async function gunzipBlob(b) { return await new Response(b.stream().pipeThrough(new DecompressionStream("gzip"))).blob(); }
+function shouldGz(meta, size) { return gzOK() && size > 1024 && size < 50 * 1024 * 1024 && isTextLike(meta.path || meta.name || "", meta.mime); }
+
 async function streamFile(meta, blob) {   // meta.kind = 'sync' | 'chat'
   await sendLock();
   try {
-    channel.send(JSON.stringify({ t: "fstart", ...meta, size: blob.size }));
+    let send = blob, gz = false;
+    if (shouldGz(meta, blob.size)) { try { const z = await gzipBlob(blob); if (z.size < blob.size * 0.92) { send = z; gz = true; } } catch {} }
+    const CH = bestChunk();
+    channel.send(JSON.stringify({ t: "fstart", ...meta, size: send.size, gz }));
     const nm = (meta.path || meta.name || "file").split("/").pop();
-    let off = 0; setProgress("📤 ส่ง " + nm, blob.size ? 0 : 1);
-    while (off < blob.size) {
+    let off = 0; setProgress("📤 ส่ง " + nm + (gz ? " (zip)" : ""), send.size ? 0 : 1);
+    while (off < send.size) {
       if (channel.bufferedAmount > HIGH_WATER) await waitDrain();
-      const buf = await blob.slice(off, off + CHUNK).arrayBuffer(); channel.send(buf); off += buf.byteLength;
-      setProgress("📤 ส่ง " + nm, off / blob.size);
+      const buf = await send.slice(off, off + CH).arrayBuffer(); channel.send(buf); off += buf.byteLength;
+      setProgress("📤 ส่ง " + nm, off / send.size);
     }
     channel.send(JSON.stringify({ t: "fend" }));
     nUp++; refreshStats();
@@ -583,7 +593,8 @@ async function onMessage(e) {
 }
 async function finishIncoming() {
   const inc = incoming; incoming = null; if (!inc) return;
-  const blob = new Blob(inc.parts);
+  let blob = new Blob(inc.parts);
+  if (inc.meta.gz) { try { blob = await gunzipBlob(blob); } catch (e) { logLine("err", "แตกไฟล์ zip ไม่ได้", inc.meta.path || inc.meta.name || ""); } }
   if (inc.meta.kind === "chat") { receiveChatFile(inc.meta, blob); return; }
   if (!store) return;                                       // sync → เขียนทับ
   try {
