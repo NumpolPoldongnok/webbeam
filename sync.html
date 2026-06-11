@@ -108,7 +108,26 @@
         <input type="text" id="myName" placeholder="เช่น MacA" style="flex:1; min-width:120px">
       </div>
 
-      <p class="step">เชื่อมต่อแบบ offline (ไม่ต้องมีเน็ต) — เลือกบทบาท แล้วแลกรหัส/สแกน QR</p>
+      <!-- 🔥 โหมด Hotspot: เชื่อมอัตโนมัติ ไม่ต้องแลกรหัส (มี broker บนเครื่องเดียว) -->
+      <div style="border:1px solid var(--accent); border-radius:10px; padding:12px; margin-bottom:14px">
+        <p class="step" style="margin-bottom:8px">🔥 <b>โหมด Hotspot — เชื่อมอัตโนมัติ ไม่ต้องแลกรหัส</b> · หลุดแล้วต่อกลับเอง</p>
+        <div class="row" style="margin-bottom:8px">
+          <div class="seg" id="brokerRoleSeg">
+            <button data-brole="host" class="on">เครื่องหลัก (รัน broker)</button>
+            <button data-brole="join">อีกเครื่อง</button>
+          </div>
+        </div>
+        <div class="row">
+          <span class="hint">Broker IP</span>
+          <input type="text" id="brokerIP" placeholder="localhost (เครื่องหลัก) หรือ IP เครื่องหลัก (อีกเครื่อง)" style="flex:1; min-width:200px">
+          <button id="btnAutoStart">เริ่มอัตโนมัติ</button>
+          <button class="ghost" id="btnAutoStop" disabled>หยุด</button>
+        </div>
+        <label class="toggle" style="margin-top:8px"><input type="checkbox" id="autoRemember"> จำไว้ — เปิดหน้ามาเชื่อมให้อัตโนมัติเลย</label>
+        <p class="hint" id="brokerHint" style="margin-top:8px"><b>เครื่องหลัก:</b> เปิด Terminal ไปที่โฟลเดอร์ WebBeam รัน <code>node broker.mjs</code> → มันจะบอก IP · ใส่ Broker IP = <code>localhost</code> แล้วกด "เริ่มอัตโนมัติ" · <b>อีกเครื่อง:</b> ใส่ IP ที่ broker บอก แล้วกด "เริ่มอัตโนมัติ" — เชื่อมเอง</p>
+      </div>
+
+      <p class="step">หรือเชื่อมแบบ manual (ไม่ต้องมี broker) — เลือกบทบาท แล้วแลกรหัส/สแกน QR</p>
       <div class="seg" id="roleSeg" style="margin-top:4px">
         <button data-role="a" class="on">เริ่ม (A)</button>
         <button data-role="b">เข้าร่วม (B)</button>
@@ -132,6 +151,11 @@
         <div class="qrbox hidden" id="answerQR"></div>
       </div>
       <div class="row" style="margin-top:12px">
+        <span class="hint">IP เครื่องนี้ (LAN)</span>
+        <input type="text" id="myIP" placeholder="เช่น 192.168.1.23 — ใส่ถ้าเครือข่ายบล็อก mDNS แล้วต่อไม่ติด" style="flex:1; min-width:200px">
+        <span class="hint">ดูได้จาก System Settings → Wi-Fi → Details · ใส่ทั้งสองเครื่อง (IP ของใครของมัน) แล้วสร้างรหัสใหม่</span>
+      </div>
+      <div class="row" style="margin-top:8px">
         <label class="toggle"><input type="checkbox" id="useStun"> ลองใช้ STUN ถ้าต่อ local ไม่ติด (ตอนจับคู่ใช้เน็ต ช่วยกรณีคอนโดบล็อก mDNS)</label>
       </div>
       <p class="hint" style="margin-top:10px">🔧 Debug การเชื่อมต่อ (ดูว่า ICE ติดตรงไหน):</p>
@@ -166,9 +190,12 @@
   <div class="card">
     <h2>โฟลเดอร์ที่จะซิงค์</h2>
     <div class="row">
+      <button id="reopenFolder" class="hidden"></button>
       <button class="ghost" id="pickFolder">เลือกโฟลเดอร์…</button>
+      <button class="ghost sm" id="cleanCrswap" disabled>🧹 ล้างไฟล์ .crswap</button>
       <span class="hint" id="folderText">ยังไม่เลือก</span>
     </div>
+    <p class="hint" style="margin-top:6px">💡 เครื่องจำโฟลเดอร์ล่าสุดไว้ — เปิดหน้าใหม่กดปุ่มเดียวใช้ต่อได้เลย ไม่ต้องไล่หาโฟลเดอร์ใหม่</p>
     <p class="hint" id="fsWarn" style="margin-top:8px"></p>
     <p class="hint" style="margin-top:6px">โหมด: กด "ดึงทั้งหมดมาแทนที่" = เขียนทับไฟล์ในเครื่องนี้ด้วยของอีกเครื่อง (ทางเดียว ไม่เช็ค) ·
       ไฟล์ที่อีกเครื่องไม่มีจะไม่ถูกลบ · ข้ามอัตโนมัติ (ทุกระดับ): <code>.git .build node_modules Pods DerivedData .swiftpm build</code> ฯลฯ — sync เฉพาะ source จริง</p>
@@ -216,6 +243,25 @@
 const $ = (id) => document.getElementById(id);
 const enc = (o) => btoa(unescape(encodeURIComponent(JSON.stringify(o))));
 const dec = (s) => { s = s.trim(); try { return JSON.parse(s); } catch (e) {} return JSON.parse(decodeURIComponent(escape(atob(s)))); };
+// รหัสแบบย่อ (gzip+base64) → สั้นลง ~3 เท่า สแกน QR ง่ายขึ้น · ยังอ่านรหัสฟอร์แมตเก่าได้
+async function encSDP(o) {
+  if (gzOK()) { try {
+    const z = await gzipBlob(new Blob([JSON.stringify(o)]));
+    const b = new Uint8Array(await z.arrayBuffer());
+    let s = ""; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+    return "WB1." + btoa(s);
+  } catch {} }
+  return enc(o);
+}
+async function decSDP(s) {
+  s = s.trim();
+  if (s.startsWith("WB1.")) {
+    const bin = atob(s.slice(4)); const b = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+    return JSON.parse(await (await gunzipBlob(new Blob([b]))).text());
+  }
+  return dec(s);
+}
 const fmtTime = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const CHUNK = 64 * 1024, HIGH_WATER = 8 * 1024 * 1024;
 // โฟลเดอร์ที่ข้ามทุกระดับ (build cache/regenerate ได้ — กันลาก .build หนักๆ ของ iOS/SPM มาด้วย)
@@ -234,6 +280,16 @@ async function sha256(buf) {
 // ================= name =================
 $("myName").value = myName;
 $("myName").addEventListener("input", () => { myName = $("myName").value.trim(); localStorage.setItem("webbeam.syncname", myName); });
+$("myIP").value = localStorage.getItem("webbeam.myip") || "";
+$("myIP").addEventListener("input", () => localStorage.setItem("webbeam.myip", $("myIP").value.trim()));
+// แทน mDNS (.local) ใน candidate ด้วย IP จริงที่ผู้ใช้กรอก — แก้กรณีเครือข่ายบล็อก mDNS ทำให้หากันไม่เจอ
+function mungeSDP(d) {
+  const ip = ($("myIP").value || "").trim();
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return { type: d.type, sdp: d.sdp };
+  const sdp = d.sdp.replace(/^(a=candidate:\S+ \d+ \S+ \d+ )[a-fA-F0-9-]+\.local(?= )/gm, "$1" + ip);
+  dbg("ใส่ IP จริงแทน mDNS ใน candidate: " + ip);
+  return { type: d.type, sdp };
+}
 
 // ================= status =================
 function setStatus(t, s) { $("status").textContent = t; $("dot").className = "dot" + (s ? " " + s : ""); }
@@ -275,6 +331,23 @@ async function logSelectedPair() {
     if (pair) { const L = stats.get(pair.localCandidateId), R = stats.get(pair.remoteCandidateId); dbg("✅ เส้นทางที่ใช้: " + (L ? L.candidateType : "?") + " ↔ " + (R ? R.candidateType : "?")); }
   } catch (e) {}
 }
+// ตอน ICE failed: dump ทุก candidate pair ที่ลอง — ดูว่าส่ง request ไปแล้วได้คำตอบกลับไหม (ชี้ว่าโดนบล็อกขาไหน)
+async function dumpPairs() {
+  try {
+    const stats = await pc.getStats();
+    let anyResp = false, n = 0;
+    stats.forEach(r => {
+      if (r.type !== "candidate-pair") return;
+      n++;
+      const L = stats.get(r.localCandidateId), R = stats.get(r.remoteCandidateId);
+      const ip = c => c ? ((c.address || c.ip || "?") + ":" + (c.port || "")) : "?";
+      const req = r.requestsSent != null ? r.requestsSent : "?", resp = r.responsesReceived != null ? r.responsesReceived : "?";
+      if (r.responsesReceived > 0) anyResp = true;
+      dbg("pair " + ip(L) + " → " + ip(R) + " · " + r.state + " · ส่ง " + req + " ตอบกลับ " + resp);
+    });
+    if (n && !anyResp) dbg("⚠️ ส่ง request แล้วไม่มีคำตอบกลับเลยสักคู่ = ทราฟฟิกโดนบล็อก → เช็ค (1) ping IP อีกเครื่อง (client isolation?) (2) macOS Firewall ทั้งสองเครื่อง (3) Zscaler/VPN ที่ดัก UDP → ปิดชั่วคราว · ทางหนี: hotspot มือถือ หรือสาย Thunderbolt");
+  } catch {}
+}
 function iceConfig() {
   return ($("useStun") && $("useStun").checked) ? { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] } : { iceServers: [] };
 }
@@ -285,14 +358,19 @@ function newPeer() {
   pc.onicegatheringstatechange = () => dbg("gather: " + pc.iceGatheringState);
   pc.oniceconnectionstatechange = () => {
     dbg("ICE: " + pc.iceConnectionState);
-    if (pc.iceConnectionState === "failed") dbg("❌ ICE failed — เครื่องคุยกันตรงไม่ได้ (Wi-Fi คอนโดมัก isolation/บล็อก mDNS) → ลองติ๊ก STUN หรือใช้ hotspot");
+    if (pc.iceConnectionState === "failed") { dbg("❌ ICE failed — เครื่องคุยกันตรงไม่ได้"); dumpPairs(); }
   };
   pc.onconnectionstatechange = () => {
     const s = pc.connectionState; dbg("conn: " + s);
     if (s === "connecting") setStatus("⏳ กำลังเชื่อมต่อ…", "wait");
     else if (s === "connected") { setStatus("🟢 เชื่อมต่อกับ " + peerName, "on"); logSelectedPair(); }
     else if (s === "disconnected") setStatus("⚠️ สัญญาณหลุดชั่วคราว กำลังรอกลับมา…", "wait");
-    else if (s === "failed" || s === "closed") onDisconnected("การเชื่อมต่อหลุด (" + s + ") — ต้องแลกรหัสใหม่");
+    else if (s === "failed" || s === "closed") {
+      if (brokerMode && !autoStop) {
+        onDisconnected("หลุด — กำลังต่อกลับอัตโนมัติ…");
+        if (brokerRole === "host") setTimeout(() => hostPostOffer(), 600);   // host ส่ง offer ใหม่ · join จะ poll เจอเอง
+      } else { onDisconnected("การเชื่อมต่อหลุด (" + s + ") — ต้องแลกรหัสใหม่"); resetPairUI(); }
+    }
   };
   pc.ondatachannel = (e) => setupChannel(e.channel);
 }
@@ -308,23 +386,125 @@ $("btnCreateOffer").addEventListener("click", async () => {
   await pc.setLocalDescription(await pc.createOffer());
   setStatus("รอแลกรหัส…", "wait"); await waitIceComplete();
   dbg("offer ของฉัน: " + sdpCands(pc.localDescription.sdp));
-  $("offerOut").value = enc(pc.localDescription); showQR("offerQR", JSON.stringify(pc.localDescription));
+  const d = mungeSDP(pc.localDescription); const code = await encSDP(d);
+  $("offerOut").value = code; showQR("offerQR", code);
   $("copyOffer").disabled = false; $("btnAcceptAnswer").disabled = false; $("btnCreateOffer").disabled = true;
 });
 $("btnAcceptAnswer").addEventListener("click", async () => {
-  try { const a = dec($("answerIn").value); dbg("รับ answer จาก B: " + sdpCands(a.sdp)); await pc.setRemoteDescription(a); setStatus("⏳ กำลังเชื่อมต่อ…", "wait"); }
+  try { const a = await decSDP($("answerIn").value); dbg("รับ answer จาก B: " + sdpCands(a.sdp)); await pc.setRemoteDescription(a); setStatus("⏳ กำลังเชื่อมต่อ…", "wait"); }
   catch (e) { alert("รหัสไม่ถูกต้อง: " + e.message); }
 });
 $("btnCreateAnswer").addEventListener("click", async () => {
   try {
-    newPeer(); const o = dec($("offerIn").value); dbg("รับ offer จาก A: " + sdpCands(o.sdp)); await pc.setRemoteDescription(o);
+    newPeer(); const o = await decSDP($("offerIn").value); dbg("รับ offer จาก A: " + sdpCands(o.sdp)); await pc.setRemoteDescription(o);
     await pc.setLocalDescription(await pc.createAnswer());
     setStatus("รอ A เชื่อมต่อ…", "wait"); await waitIceComplete();
     dbg("answer ของฉัน: " + sdpCands(pc.localDescription.sdp));
-    $("answerOut").value = enc(pc.localDescription); showQR("answerQR", JSON.stringify(pc.localDescription));
+    const d = mungeSDP(pc.localDescription); const code = await encSDP(d);
+    $("answerOut").value = code; showQR("answerQR", code);
     $("copyAnswer").disabled = false; $("btnCreateAnswer").disabled = true;
   } catch (e) { alert("รหัสไม่ถูกต้อง: " + e.message); }
 });
+// วางรหัสแล้วไปต่อให้อัตโนมัติ — ลดขั้นตอน (วาง = เชื่อมเลย ไม่ต้องกดปุ่ม)
+$("offerIn").addEventListener("paste", () => setTimeout(() => { if ($("offerIn").value.trim() && !$("btnCreateAnswer").disabled) $("btnCreateAnswer").click(); }, 60));
+$("answerIn").addEventListener("paste", () => setTimeout(() => { if ($("answerIn").value.trim() && !$("btnAcceptAnswer").disabled) $("btnAcceptAnswer").click(); }, 60));
+// หลุดแล้วเตรียมจับคู่ใหม่ให้ทันที (A สร้างรหัสใหม่ให้เลย)
+function resetPairUI() {
+  $("offerOut").value = ""; $("answerOut").value = ""; $("offerIn").value = ""; $("answerIn").value = "";
+  $("btnCreateOffer").disabled = false; $("btnCreateAnswer").disabled = false;
+  $("copyOffer").disabled = true; $("copyAnswer").disabled = true; $("btnAcceptAnswer").disabled = true;
+  $("offerQR").classList.add("hidden"); $("answerQR").classList.add("hidden");
+  $("connPanel").open = true; $("connSummary").textContent = "⚙️ การเชื่อมต่อหลุด — แลกรหัสใหม่";
+  if (role === "a") $("btnCreateOffer").click();   // A สร้างรหัสรอไว้เลย
+}
+
+// ================= 🔥 โหมด Hotspot: เชื่อมอัตโนมัติผ่าน broker =================
+let brokerMode = false, brokerBase = "", brokerRole = "host", autoStop = true;
+let answerPoll = null, lastOfferSeen = "", reoffering = false;
+$("brokerIP").value = localStorage.getItem("webbeam.brokerip") || "";
+$("brokerIP").addEventListener("input", () => localStorage.setItem("webbeam.brokerip", $("brokerIP").value.trim()));
+brokerRole = localStorage.getItem("webbeam.brokerrole") || "host";
+[...$("brokerRoleSeg").children].forEach(b => b.classList.toggle("on", b.dataset.brole === brokerRole));
+$("autoRemember").checked = localStorage.getItem("webbeam.autoremember") === "1";
+$("brokerRoleSeg").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return; brokerRole = b.dataset.brole;
+  [...$("brokerRoleSeg").children].forEach(x => x.classList.toggle("on", x === b));
+  localStorage.setItem("webbeam.brokerrole", brokerRole);
+});
+$("autoRemember").addEventListener("change", () => localStorage.setItem("webbeam.autoremember", $("autoRemember").checked ? "1" : "0"));
+
+function resolveBroker() {
+  let v = ($("brokerIP").value || "").trim() || "localhost";
+  if (!/^https?:\/\//.test(v)) v = "http://" + v;
+  const hostPart = v.replace(/^https?:\/\//, "");
+  if (!/:\d+/.test(hostPart)) v = v.replace(/\/+$/, "") + ":8787";
+  return v.replace(/\/+$/, "");
+}
+async function bPost(p, body) { return fetch(brokerBase + p, { method: "POST", headers: { "content-type": "text/plain" }, body: body || "" }); }
+async function bGet(p) { const r = await fetch(brokerBase + p); if (r.status === 204) return null; return await r.text(); }
+
+async function hostPostOffer() {
+  if (reoffering || autoStop) return; reoffering = true;
+  try {
+    newPeer(); setupChannel(pc.createDataChannel("sync", { ordered: true }));
+    await pc.setLocalDescription(await pc.createOffer());
+    setStatus("⏳ รออีกเครื่องเข้ามา…", "wait"); await waitIceComplete();
+    await bPost("/offer", JSON.stringify(mungeSDP(pc.localDescription)));
+    dbg("📡 ส่ง offer ขึ้น broker แล้ว — รอ answer");
+  } catch (e) { dbg("broker offer ผิดพลาด: " + e.message + " (broker รันอยู่ไหม?)"); }
+  reoffering = false;
+}
+function startAnswerPoll() {
+  clearInterval(answerPoll);
+  answerPoll = setInterval(async () => {
+    if (autoStop) { clearInterval(answerPoll); return; }
+    try {
+      if (pc && pc.connectionState === "connected") return;
+      const a = await bGet("/answer");
+      if (a && pc && pc.signalingState === "have-local-offer" && !pc.currentRemoteDescription) {
+        await pc.setRemoteDescription(JSON.parse(a)); dbg("✅ ได้ answer จาก broker → กำลังเชื่อม");
+      }
+    } catch (e) { dbg("broker ติดต่อไม่ได้: " + e.message); }
+  }, 800);
+}
+function startJoinPoll() {
+  clearInterval(answerPoll);
+  answerPoll = setInterval(async () => {
+    if (autoStop) { clearInterval(answerPoll); return; }
+    try {
+      const o = await bGet("/offer");
+      if (o && o !== lastOfferSeen) {
+        lastOfferSeen = o;
+        newPeer(); await pc.setRemoteDescription(JSON.parse(o));
+        await pc.setLocalDescription(await pc.createAnswer());
+        setStatus("⏳ กำลังเชื่อม…", "wait"); await waitIceComplete();
+        await bPost("/answer", JSON.stringify(mungeSDP(pc.localDescription)));
+        dbg("✅ ตอบ answer ขึ้น broker แล้ว");
+      }
+    } catch (e) { dbg("broker ติดต่อไม่ได้: " + e.message + " (เช็ค IP/ว่า broker รันอยู่)"); }
+  }, 800);
+}
+async function autoStart() {
+  brokerBase = resolveBroker();
+  try { await fetch(brokerBase + "/ping"); }
+  catch (e) { dbg("❌ ต่อ broker ไม่ได้ที่ " + brokerBase + " — เครื่องหลักรัน node broker.mjs แล้วหรือยัง? IP ถูกไหม?"); alert("ต่อ broker ไม่ได้ที่ " + brokerBase + "\nเครื่องหลักต้องรัน node broker.mjs และใส่ IP ให้ถูก"); return; }
+  autoStop = false; brokerMode = true; lastOfferSeen = "";
+  $("btnAutoStart").disabled = true; $("btnAutoStop").disabled = false;
+  $("connSummary").textContent = "🔥 โหมด Hotspot — กำลังจับคู่อัตโนมัติ…";
+  dbg("เริ่มโหมด Hotspot (" + brokerRole + ") ผ่าน " + brokerBase);
+  if (brokerRole === "host") { await bPost("/reset").catch(() => {}); await hostPostOffer(); startAnswerPoll(); }
+  else startJoinPoll();
+}
+function autoStopFn() {
+  autoStop = true; brokerMode = false; clearInterval(answerPoll);
+  $("btnAutoStart").disabled = false; $("btnAutoStop").disabled = true;
+  try { if (channel) channel.close(); if (pc) pc.close(); } catch {}
+  setStatus("หยุดโหมดอัตโนมัติแล้ว", "");
+}
+$("btnAutoStart").addEventListener("click", autoStart);
+$("btnAutoStop").addEventListener("click", autoStopFn);
+// เปิดหน้ามาแล้วจำไว้ → เชื่อมให้เลย (อีกเครื่องไม่ต้องทำอะไร)
+if ($("autoRemember").checked && ($("brokerIP").value || "").trim()) setTimeout(autoStart, 400);
 function copyBtn(b, t) { $(b).addEventListener("click", async () => { $(t).select(); try { await navigator.clipboard.writeText($(t).value); } catch {} const o = $(b).textContent; $(b).textContent = "คัดลอก ✓"; setTimeout(() => $(b).textContent = o, 1200); }); }
 copyBtn("copyOffer", "offerOut"); copyBtn("copyAnswer", "answerOut");
 function showQR(id, text) {
@@ -348,7 +528,11 @@ async function startScan(t) {
   const tick = () => { if (!scanStream) return;
     if (v.readyState >= v.HAVE_ENOUGH_DATA) { cv.width = v.videoWidth; cv.height = v.videoHeight; x.drawImage(v, 0, 0, cv.width, cv.height);
       const im = x.getImageData(0, 0, cv.width, cv.height); const r = jsQR(im.data, im.width, im.height, { inversionAttempts: "dontInvert" });
-      if (r && r.data) { $(scanTarget).value = r.data; stopScan(); return; } }
+      if (r && r.data) { $(scanTarget).value = r.data; stopScan();
+        // สแกนติดแล้วไปต่อให้เลย
+        if (scanTarget === "offerIn" && !$("btnCreateAnswer").disabled) $("btnCreateAnswer").click();
+        else if (scanTarget === "answerIn" && !$("btnAcceptAnswer").disabled) $("btnAcceptAnswer").click();
+        return; } }
     scanRAF = requestAnimationFrame(tick); };
   scanRAF = requestAnimationFrame(tick);
 }
@@ -395,6 +579,13 @@ function setProgress(text, frac) {
   else { $("progTrack").classList.remove("indet"); const pct = Math.max(0, Math.min(100, Math.round(frac * 100)));
     $("progFill").style.width = pct + "%"; $("progPct").textContent = pct + "%"; }
 }
+// อัปเดต progress ไม่เกิน ~12 ครั้ง/วิ (DOM update ทุก chunk ทำให้ส่งช้าลง)
+let _progLast = 0;
+function setProgressFast(text, frac) {
+  const now = performance.now();
+  if (frac != null && frac < 1 && now - _progLast < 80) return;
+  _progLast = now; setProgress(text, frac);
+}
 
 // ================= storage abstraction =================
 // store: { list()->[{path,size,mtime}], read(path)->Blob, write(path,Blob)->void }
@@ -405,6 +596,7 @@ function fsStore(rootHandle) {
     for await (const [name, h] of dir.entries()) {
       if (h.kind === "directory" && IGNORE_DIRS.has(name)) continue;   // ข้ามทุกระดับ
       if (name === ".DS_Store") continue;
+      if (name.endsWith(".crswap")) continue;   // ไฟล์ swap ชั่วคราวของ Chrome — ไม่นับ/ไม่ sync
       const path = base ? base + "/" + name : name;
       if (h.kind === "file") { const f = await h.getFile(); out.push({ path, size: f.size, mtime: f.lastModified }); }
       else if (h.kind === "directory") await walk(h, path, out);
@@ -419,6 +611,18 @@ function fsStore(rootHandle) {
     async list() { const out = []; await walk(rootHandle, "", out); return out; },
     async read(path) { const { dir, name } = await navTo(path, false); const fh = await dir.getFileHandle(name); return await fh.getFile(); },
     async write(path, blob) { const { dir, name } = await navTo(path, true); const fh = await dir.getFileHandle(name, { create: true }); const w = await fh.createWritable(); await w.write(blob); await w.close(); },
+    async cleanCrswap() {
+      let n = 0;
+      async function rm(dir) {
+        const kids = [];
+        for await (const [name, h] of dir.entries()) kids.push([name, h]);
+        for (const [name, h] of kids) {
+          if (h.kind === "directory") { if (!IGNORE_DIRS.has(name)) await rm(h); }
+          else if (name.endsWith(".crswap")) { try { await dir.removeEntry(name); n++; } catch {} }
+        }
+      }
+      await rm(rootHandle); return n;
+    },
   };
 }
 
@@ -570,10 +774,32 @@ async function streamFile(meta, blob, label) {   // meta.kind = 'sync' | 'chat'
     while (off < send.size) {
       if (channel.bufferedAmount > HIGH_WATER) await waitDrain();
       const buf = await send.slice(off, off + CH).arrayBuffer(); channel.send(buf); off += buf.byteLength;
-      setProgress("📤 ส่ง " + nm, off / send.size);
+      setProgressFast("📤 ส่ง " + nm, off / send.size);
     }
     channel.send(JSON.stringify({ t: "fend" }));
     nUp++; refreshStats();
+  } finally { sendUnlock(); }
+}
+
+// ---- ส่งไฟล์เล็กเป็น "ชุด" (มัดรวม + gzip ทีเดียว) — เร็วกว่าส่งทีละไฟล์มากเมื่อมี source file เยอะ ----
+async function sendBundle(group, label) {
+  await sendLock();
+  try {
+    const metas = [], blobs = [];
+    for (const e of group) { const b = await store.read(e.path); metas.push({ path: e.path, osize: e.size, smtime: e.mtime, size: b.size }); blobs.push(b); }
+    let payload = new Blob(blobs), gz = false;
+    if (gzOK() && payload.size > 1024) { try { const z = await gzipBlob(payload); if (z.size < payload.size * 0.95) { payload = z; gz = true; } } catch {} }
+    channel.send(JSON.stringify({ t: "bstart", files: metas, size: payload.size, gz }));
+    const CH = bestChunk(); let off = 0;
+    const nm = "📤 " + (label || "") + "ส่งชุด " + group.length + " ไฟล์" + (gz ? " (zip)" : "");
+    setProgress(nm, payload.size ? 0 : 1);
+    while (off < payload.size) {
+      if (channel.bufferedAmount > HIGH_WATER) await waitDrain();
+      const buf = await payload.slice(off, off + CH).arrayBuffer(); channel.send(buf); off += buf.byteLength;
+      setProgressFast(nm, off / payload.size);
+    }
+    channel.send(JSON.stringify({ t: "bend" }));
+    nUp += group.length; refreshStats();
   } finally { sendUnlock(); }
 }
 
@@ -593,6 +819,9 @@ async function onMessage(e) {
     else if (m.t === "fstart") { incoming = { meta: m, parts: [], received: 0 }; resetWatchdog();
       if (m.kind === "sync") setProgress("📥 (" + (pullGot + 1) + "/" + (pullTotal || "?") + ") " + (m.path || "").split("/").pop(), m.size ? 0 : null); }
     else if (m.t === "fend") await finishIncoming();
+    else if (m.t === "bstart") { incoming = { meta: m, parts: [], received: 0, bundle: true }; resetWatchdog();
+      setProgress("📥 (" + (pullGot + 1) + "–" + (pullGot + m.files.length) + "/" + (pullTotal || "?") + ") ชุด " + m.files.length + " ไฟล์", m.size ? 0 : null); }
+    else if (m.t === "bend") await finishBundle();
     else if (m.t === "pulldone") {
       saveRecvIndex(); syncBtnIdle();
       logLine("down", "✅ ดึงเสร็จจาก " + peerName, "รับ/แทนที่ " + pullGot + " ไฟล์" + (m.skipped != null ? " · ข้าม(ไม่เปลี่ยน) " + m.skipped : ""));
@@ -601,7 +830,24 @@ async function onMessage(e) {
     return;
   }
   if (incoming) { incoming.parts.push(e.data); incoming.received += e.data.byteLength;
-    if (incoming.meta.kind === "sync") { const sz = incoming.meta.size; setProgress("📥 (" + (pullGot + 1) + "/" + (pullTotal || "?") + ") " + incoming.meta.path.split("/").pop(), sz ? incoming.received / sz : null); } }
+    if (incoming.bundle) setProgressFast("📥 ชุด " + incoming.meta.files.length + " ไฟล์", incoming.meta.size ? incoming.received / incoming.meta.size : null);
+    else if (incoming.meta.kind === "sync") { const sz = incoming.meta.size; setProgressFast("📥 (" + (pullGot + 1) + "/" + (pullTotal || "?") + ") " + incoming.meta.path.split("/").pop(), sz ? incoming.received / sz : null); } }
+}
+
+async function finishBundle() {
+  const inc = incoming; incoming = null; if (!inc || !store) return;
+  let blob = new Blob(inc.parts);
+  if (inc.meta.gz) { try { blob = await gunzipBlob(blob); } catch (e) { logLine("err", "แตกชุดไฟล์ไม่ได้", e.message); return; } }
+  const buf = await blob.arrayBuffer(); let off = 0;
+  for (const f of inc.meta.files) {
+    try {
+      await store.write(f.path, new Blob([buf.slice(off, off + f.size)]));
+      recvIndex[f.path] = f.osize + ":" + f.smtime;
+      nDown++; pullGot++; logLine("down", "← แทนที่", f.path);
+    } catch (e) { logLine("err", "เขียนพลาด", f.path + " (" + e.message + ")"); }
+    off += f.size;
+  }
+  refreshStats(); resetWatchdog();
 }
 // incremental: จำว่า "เคยรับไฟล์ไหนมาแล้ว" (path -> "size:mtime" ของฝั่งส่ง) เพื่อข้ามไฟล์ที่ไม่เปลี่ยนรอบหน้า
 let recvIndex = {}, recvKey = "webbeam.recv.mem", pullHave = null;
@@ -656,9 +902,17 @@ async function sendAllFiles(have) {
     skipped = list.length - toSend.length;
     channel.send(JSON.stringify({ t: "pullinfo", total: toSend.length }));        // บอกผู้รับว่าจะส่งกี่ไฟล์ (ทำ progress รวม)
     logLine("up", "ส่งให้ " + peerName, "ส่ง " + toSend.length + " · ข้าม(ไม่เปลี่ยน) " + skipped);
-    for (let i = 0; i < toSend.length; i++) {
-      const e = toSend[i]; const b = await store.read(e.path);
-      await streamFile({ kind: "sync", path: e.path, osize: e.size, smtime: e.mtime }, b, "(" + (i + 1) + "/" + toSend.length + ") "); sent++;
+    // ไฟล์เล็ก → มัดเป็นชุด (เร็วกว่ามาก) · ไฟล์ใหญ่ → ส่งเดี่ยวพร้อม progress ต่อไฟล์
+    const SMALL = 256 * 1024, B_BYTES = 8 * 1024 * 1024, B_FILES = 200;
+    const smalls = toSend.filter(e => e.size <= SMALL), bigs = toSend.filter(e => e.size > SMALL);
+    for (let i = 0; i < smalls.length;) {
+      const group = []; let bytes = 0;
+      while (i < smalls.length && group.length < B_FILES && (group.length === 0 || bytes + smalls[i].size <= B_BYTES)) { bytes += smalls[i].size; group.push(smalls[i++]); }
+      await sendBundle(group, "(" + (sent + group.length) + "/" + toSend.length + ") "); sent += group.length;
+    }
+    for (const e of bigs) {
+      const b = await store.read(e.path);
+      await streamFile({ kind: "sync", path: e.path, osize: e.size, smtime: e.mtime }, b, "(" + (sent + 1) + "/" + toSend.length + ") "); sent++;
     }
     channel.send(JSON.stringify({ t: "pulldone", sent, skipped }));
   } catch (e) { logLine("err", "ส่งพลาด", e.message); }
@@ -751,16 +1005,51 @@ if (!window.showDirectoryPicker) {
   $("fsWarn").innerHTML = "⚠️ เบราว์เซอร์นี้ไม่รองรับการเลือกโฟลเดอร์ (เช่น Safari) — ต้องใช้ <b>Chrome/Edge</b>";
   $("pickFolder").disabled = true;
 }
+// จำ handle โฟลเดอร์ไว้ใน IndexedDB → เปิดหน้าใหม่ กดปุ่มเดียว (หรืออัตโนมัติถ้า Chrome จำ permission ไว้)
+function idb() { return new Promise((res, rej) => { const r = indexedDB.open("webbeam", 1); r.onupgradeneeded = () => r.result.createObjectStore("kv"); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
+async function idbSet(k, v) { const db = await idb(); return new Promise((res, rej) => { const tx = db.transaction("kv", "readwrite"); tx.objectStore("kv").put(v, k); tx.oncomplete = res; tx.onerror = () => rej(tx.error); }); }
+async function idbGet(k) { const db = await idb(); return new Promise((res, rej) => { const rq = db.transaction("kv").objectStore("kv").get(k); rq.onsuccess = () => res(rq.result); rq.onerror = () => rej(rq.error); }); }
+
+async function useFolder(h) {
+  store = fsStore(h);
+  loadRecvIndex(h.name);
+  $("folderText").textContent = "📁 " + h.name;
+  $("reopenFolder").classList.add("hidden");
+  $("cleanCrswap").disabled = false;
+  if (channel && channel.readyState === "open") $("syncNow").disabled = false;
+  const n = (await store.list()).length; refreshStats(n);
+  logLine("up", "เลือกโฟลเดอร์", h.name + " (" + n + " ไฟล์) · เคยรับไว้ " + Object.keys(recvIndex).length + " ไฟล์");
+}
 $("pickFolder").addEventListener("click", async () => {
   try {
     const h = await window.showDirectoryPicker({ mode: "readwrite" });
-    store = fsStore(h);
-    loadRecvIndex(h.name);
-    $("folderText").textContent = "📁 " + h.name;
-    if (channel && channel.readyState === "open") $("syncNow").disabled = false;
-    const n = (await store.list()).length; refreshStats(n);
-    logLine("up", "เลือกโฟลเดอร์", h.name + " (" + n + " ไฟล์) · เคยรับไว้ " + Object.keys(recvIndex).length + " ไฟล์");
+    await useFolder(h);
+    try { await idbSet("lastDir", h); } catch {}
   } catch (e) { /* ยกเลิก */ }
+});
+// ตอนโหลด: ถ้ามีโฟลเดอร์ล่าสุด → ใช้เลยถ้า permission ยังอยู่ ไม่งั้นโชว์ปุ่มกดครั้งเดียว
+(async () => {
+  if (!window.showDirectoryPicker) return;
+  let h; try { h = await idbGet("lastDir"); } catch {}
+  if (!h) return;
+  try {
+    if (await h.queryPermission({ mode: "readwrite" }) === "granted") { await useFolder(h); return; }
+  } catch {}
+  const btn = $("reopenFolder");
+  btn.textContent = "📁 ใช้ \"" + h.name + "\" (ล่าสุด)";
+  btn.classList.remove("hidden");
+  btn.onclick = async () => {
+    try { if (await h.requestPermission({ mode: "readwrite" }) === "granted") await useFolder(h); }
+    catch (e) { logLine("err", "เปิดโฟลเดอร์ล่าสุดไม่ได้", e.message + " — เลือกใหม่"); btn.classList.add("hidden"); }
+  };
+})();
+
+$("cleanCrswap").addEventListener("click", async () => {
+  if (!store || !store.cleanCrswap) return;
+  $("cleanCrswap").disabled = true;
+  try { const n = await store.cleanCrswap(); logLine(n ? "up" : "info", "🧹 ล้าง .crswap", n ? ("ลบ " + n + " ไฟล์") : "ไม่มีไฟล์ค้าง"); refreshStats((await store.list()).length); }
+  catch (e) { logLine("err", "ล้าง .crswap พลาด", e.message); }
+  $("cleanCrswap").disabled = false;
 });
 
 // ---- wiring: แท็บ + composer + drag ----

@@ -1,0 +1,134 @@
+// Headless protocol test: run sync.html's real script in 2 vm contexts (A,B),
+// wire a loopback "data channel", then test: pull-all (bundles+big file),
+// incremental skip, one-way, encSDP/decSDP roundtrip, mungeSDP IP replacement.
+import vm from 'node:vm';
+import fs from 'node:fs';
+
+const html = fs.readFileSync(new URL('../sync.html', import.meta.url), 'utf8');
+const js = html.match(/<script>([\s\S]*?)<\/script>/g).pop().replace(/<\/?script>/g, '');
+
+function makeEl(id) {
+  const el = {
+    id, value: '', textContent: '', innerHTML: '', disabled: false, open: false, checked: false,
+    style: {}, dataset: {}, children: [], scrollTop: 0, scrollHeight: 0,
+    classList: { add(){}, remove(){}, toggle(){}, contains: () => false },
+    addEventListener(){}, removeEventListener(){}, remove(){}, select(){}, focus(){}, click(){},
+    appendChild(c){ this.children.push(c); return c; },
+    prepend(c){ this.children.unshift(c); },
+    get firstChild(){ return this.children[0]; },
+    get lastChild(){ return this.children[this.children.length - 1]; },
+    querySelector(){ return makeEl('q'); },
+    querySelectorAll(){ return []; },
+  };
+  return el;
+}
+function makeCtx(name) {
+  const els = new Map();
+  const $ = (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); };
+  const storage = new Map();
+  const sandbox = {
+    console, setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask,
+    performance, crypto, Blob, File, TextEncoder, TextDecoder, Response,
+    CompressionStream, DecompressionStream, URL,
+    btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
+    atob: (s) => Buffer.from(s, 'base64').toString('binary'),
+    localStorage: { getItem: k => storage.has(k) ? storage.get(k) : null, setItem: (k,v) => storage.set(k, String(v)), removeItem: k => storage.delete(k) },
+    document: {
+      getElementById: $, createElement: () => makeEl('new'),
+      querySelectorAll: () => [], addEventListener(){},
+    },
+    navigator: {},
+    addEventListener(){}, removeEventListener(){},
+    Date, JSON, Math, Promise, RegExp, Object, Array, Map, Set, Number, String, Uint8Array, ArrayBuffer,
+  };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  const ctx = vm.createContext(sandbox);
+  vm.runInContext(js, ctx, { filename: name + '.js' });
+  return { ctx, $, run: (code) => vm.runInContext(code, ctx) };
+}
+
+const A = makeCtx('A'), B = makeCtx('B');
+
+// loopback channels
+function chan(other) {
+  return {
+    readyState: 'open', binaryType: '', bufferedAmount: 0, bufferedAmountLowThreshold: 0,
+    addEventListener(){}, removeEventListener(){},
+    send(data) { queueMicrotask(() => other._recv(data)); },
+  };
+}
+const chA = chan(null), chB = chan(null);
+chA._recv = null; chB._recv = null;
+// A.send -> B.onMessage ; B.send -> A.onMessage
+const cA = { ...chA, send: d => queueMicrotask(() => B.run('channel.onmessage')( { data: d } )) };
+const cB = { ...chB, send: d => queueMicrotask(() => A.run('channel.onmessage')( { data: d } )) };
+A.ctx.__ch = cA; B.ctx.__ch = cB;
+A.run('setupChannel(__ch)'); B.run('setupChannel(__ch)');
+A.run('channel.onopen()'); B.run('channel.onopen()');
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let fails = 0;
+const chk = (c, m) => { console.log((c ? '  ✓ ' : '  ❌ ') + m); if (!c) fails++; };
+
+// ---- test 1: pull with bundles + big file ----
+const filesA = {};
+for (let i = 0; i < 30; i++) filesA['src/f' + i + '.js'] = 'console.log(' + i + ');//' + 'x'.repeat(50 + i);
+A.ctx.__big = 'B'.repeat(600 * 1024); // > SMALL(256KB) -> single-file path
+A.run('SYNC.initMem({})');
+A.run(`(async () => { const f = ${JSON.stringify(filesA)}; for (const p in f) await SYNC.put(p, f[p]); await SYNC.put('big.bin', __big); })()`);
+B.run('SYNC.initMem({ "src/f0.js": "STALE", "onlyB.txt": "KEEP" })');
+await sleep(50);
+
+console.log('test 1: ดึงทั้งหมด (ชุดไฟล์เล็ก + ไฟล์ใหญ่เดี่ยว)');
+B.run('SYNC.pullAll()');
+for (let i = 0; i < 100; i++) { await sleep(100); const d = B.run('SYNC.dump()'); if (d && d['big.bin'] && d['src/f29.js']) break; }
+await sleep(300);
+const db = B.run('SYNC.dump()');
+chk(db['src/f0.js'] === filesA['src/f0.js'], 'ไฟล์ stale ถูกเขียนทับ');
+chk(Object.keys(filesA).every(p => db[p] === filesA[p]), 'ไฟล์เล็กครบ 30 ไฟล์ (มาเป็นชุด gzip)');
+chk(db['big.bin'] && db['big.bin'].length === 600 * 1024, 'ไฟล์ใหญ่ 600KB ครบ (ส่งเดี่ยว)');
+chk(db['onlyB.txt'] === 'KEEP', 'ไฟล์ที่ A ไม่มี ไม่ถูกลบ');
+const da = A.run('SYNC.dump()');
+chk(!da['onlyB.txt'], 'ทางเดียว: A ไม่เปลี่ยน');
+const stB = B.run('SYNC.stats()');
+chk(stB.down === 31, 'นับรับเข้า = 31 (' + stB.down + ')');
+
+// ---- test 2: incremental — รอบสองต้องข้ามทั้งหมด ----
+console.log('test 2: ดึงซ้ำ → ข้ามทุกไฟล์ (incremental)');
+const upBefore = A.run('SYNC.stats()').up;
+B.run('SYNC.pullAll()');
+await sleep(800);
+const upAfter = A.run('SYNC.stats()').up;
+chk(upAfter === upBefore, 'รอบสอง A ไม่ส่งอะไรเลย (up ' + upBefore + ' → ' + upAfter + ')');
+
+// ---- test 3: แก้ 1 ไฟล์ → ส่งเฉพาะไฟล์นั้น ----
+console.log('test 3: แก้ไฟล์เดียว → ส่งมา 1 ไฟล์');
+A.run('SYNC.put("src/f5.js", "CHANGED!")');
+await sleep(50);
+B.run('SYNC.pullAll()');
+await sleep(800);
+const db3 = B.run('SYNC.dump()');
+chk(db3['src/f5.js'] === 'CHANGED!', 'ได้ไฟล์ที่แก้');
+chk(A.run('SYNC.stats()').up === upAfter + 1, 'ส่งเพิ่มแค่ 1 (' + A.run('SYNC.stats()').up + ')');
+
+// ---- test 4: encSDP/decSDP roundtrip + mungeSDP ----
+console.log('test 4: รหัสเชื่อมต่อแบบย่อ + แทน mDNS ด้วย IP');
+const sdpIn = 'v=0\r\na=candidate:123 1 udp 2122 abcd-ef12.local 5000 typ host generation 0\r\na=candidate:124 1 tcp 2121 9999-8888.local 5001 typ host\r\n';
+A.ctx.__sdp = sdpIn;
+const enc1 = await A.run('encSDP({ type: "offer", sdp: __sdp })');
+chk(enc1.startsWith('WB1.'), 'encSDP ใช้ฟอร์แมตย่อ WB1');
+chk(enc1.length < Buffer.from(JSON.stringify({type:'offer',sdp:sdpIn})).toString('base64').length, 'สั้นกว่า base64 เดิม');
+const dec1 = await A.run(`decSDP(${JSON.stringify(enc1)})`);
+chk(dec1.sdp === sdpIn && dec1.type === 'offer', 'decSDP ถอดกลับได้ตรงเป๊ะ');
+const oldFmt = Buffer.from(unescape(encodeURIComponent(JSON.stringify({type:'answer',sdp:'x'}))), 'binary').toString('base64');
+const dec2 = await A.run(`decSDP(${JSON.stringify(oldFmt)})`);
+chk(dec2.type === 'answer', 'ยังอ่านรหัสฟอร์แมตเก่าได้');
+A.$('myIP').value = '192.168.1.42';
+const mg = A.run('mungeSDP({ type: "offer", sdp: __sdp })');
+chk(!/\.local/.test(mg.sdp) && mg.sdp.includes('192.168.1.42 5000') && mg.sdp.includes('192.168.1.42 5001'), 'mungeSDP แทน .local ทั้ง 2 candidate ด้วย IP');
+A.$('myIP').value = 'not-an-ip';
+chk(/\.local/.test(A.run('mungeSDP({ type: "offer", sdp: __sdp })').sdp), 'IP ไม่ถูกต้อง → ไม่แตะ SDP');
+
+console.log(fails ? `\n❌ FAIL ${fails}` : '\n✅ PASS ทั้งหมด');
+process.exit(fails ? 1 : 0);
