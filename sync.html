@@ -108,20 +108,8 @@
         <input type="text" id="myName" placeholder="เช่น MacA" style="flex:1; min-width:120px">
       </div>
 
-      <!-- เชื่อมด้วยรหัสห้อง (PeerJS) — วิธีหลัก -->
-      <p class="step"><b>รหัสห้อง</b> — ตั้งให้ตรงกันทั้งสองเครื่อง แล้วกดเชื่อมต่อ</p>
-      <div class="roombox">
-        <input type="text" id="roomCode" placeholder="เช่น CODE42" maxlength="24">
-        <button id="roomConnect">เชื่อมต่อ</button>
-        <button class="ghost" id="roomLeave" style="display:none">ออก</button>
-      </div>
-      <p class="hint" style="margin-top:6px">เครื่องแรกที่กดจะ "เปิดห้อง" อีกเครื่องที่ใส่รหัสเดียวกันจะเข้าห้องอัตโนมัติ ·
-        จำรหัสไว้ <b>ต่อใหม่เองหลัง refresh</b> · (ตอนจับคู่ต้องมีเน็ต, ส่งไฟล์ยัง P2P บน LAN)</p>
-
-      <!-- เชื่อมแบบ offline (แลกรหัสเอง) — fallback -->
-      <details class="off">
-        <summary>หรือเชื่อมแบบ offline ไม่มีเน็ต (แลกรหัสเอง/QR)</summary>
-      <div class="seg" id="roleSeg" style="margin-top:10px">
+      <p class="step">เชื่อมต่อแบบ offline (ไม่ต้องมีเน็ต) — เลือกบทบาท แล้วแลกรหัส/สแกน QR</p>
+      <div class="seg" id="roleSeg" style="margin-top:4px">
         <button data-role="a" class="on">เริ่ม (A)</button>
         <button data-role="b">เข้าร่วม (B)</button>
       </div>
@@ -143,7 +131,6 @@
         <textarea id="answerOut" placeholder="รหัสตอบกลับ…" readonly></textarea>
         <div class="qrbox hidden" id="answerQR"></div>
       </div>
-      </details>
     </div></div>
   </details>
 
@@ -217,7 +204,6 @@
 
 <script src="lib/qrcode.min.js"></script>
 <script src="lib/jsQR.min.js"></script>
-<script src="lib/peerjs.min.js"></script>
 <script>
 "use strict";
 // ================= helpers =================
@@ -334,105 +320,6 @@ function setupChannel(ch) {
   channel.onclose = () => onDisconnected("ปิดการเชื่อมต่อ");
   channel.onmessage = onMessage;
 }
-
-// ================= PeerJS: เชื่อมด้วยรหัสห้อง + reconnect อัตโนมัติ =================
-let pjPeer = null, pjConn = null, pjCode = null, pjReTimer = null, pjStop = false, pjIsHost = false;
-const ROOM_KEY = "webbeam.sync.room";
-function wrapConn(conn) {
-  return {
-    get readyState() { return conn.open ? "open" : "connecting"; },
-    get bufferedAmount() { return conn.dataChannel ? conn.dataChannel.bufferedAmount : 0; },
-    get bufferedAmountLowThreshold() { return conn.dataChannel ? conn.dataChannel.bufferedAmountLowThreshold : 262144; },
-    set bufferedAmountLowThreshold(v) { if (conn.dataChannel) conn.dataChannel.bufferedAmountLowThreshold = v; },
-    send(d) { conn.send(d); },
-    addEventListener(ev, h) { if (conn.dataChannel) conn.dataChannel.addEventListener(ev, h); },
-    removeEventListener(ev, h) { if (conn.dataChannel) conn.dataChannel.removeEventListener(ev, h); },
-  };
-}
-function cleanupPeer() {
-  try { if (pjConn) pjConn.close(); } catch {}
-  try { if (pjPeer) pjPeer.destroy(); } catch {}
-  pjConn = null; pjPeer = null; channel = null;
-}
-function roomBtn(text, disabled) { $("roomConnect").textContent = text; $("roomConnect").disabled = !!disabled; }
-function bindConn(conn) {
-  pjConn = conn;
-  conn.on("open", () => {
-    channel = wrapConn(conn);
-    channel.bufferedAmountLowThreshold = 256 * 1024;
-    channel.send(JSON.stringify({ t: "hello", name: myName || "ไม่ระบุ" }));
-    roomBtn("เชื่อมแล้ว ✓", false);
-    onConnected();
-  });
-  conn.on("data", (d) => onMessage({ data: d }));
-  conn.on("close", () => {
-    channel = null; roomBtn("เชื่อมต่อ", false); onDisconnected("ปิดการเชื่อมต่อ");
-    if (pjIsHost && pjPeer && !pjPeer.destroyed) setStatus("รออีกเครื่องเข้าห้อง " + pjCode + "…", "wait"); // host รอ peer กลับมา
-    else scheduleReconnect();
-  });
-  conn.on("error", () => scheduleReconnect());
-}
-function scheduleReconnect() {
-  if (pjStop || !pjCode) return;
-  clearTimeout(pjReTimer);
-  pjReTimer = setTimeout(() => { if (!channel || channel.readyState !== "open") { logLine("info", "ลองเชื่อมใหม่…", pjCode); connectRoom(pjCode, true); } }, 3000);
-}
-function connectRoom(code, isRetry) {
-  if (!window.Peer) { logLine("err", "โหลด PeerJS ไม่ได้", "ต้องมีเน็ตตอนจับคู่"); return; }
-  code = (code || "").trim().toUpperCase();
-  if (!code) { logLine("err", "ใส่รหัสห้องก่อน", ""); return; }
-  pjCode = code; pjStop = false;
-  localStorage.setItem(ROOM_KEY, code);
-  $("roomCode").value = code; roomBtn("กำลังเชื่อม…", true); $("roomLeave").style.display = "";
-  cleanupPeer();
-  setStatus("⏳ เข้าห้อง " + code + "…", "wait");
-  if (!isRetry) logLine("info", "เข้าห้อง", code);
-  tryHost(code);
-}
-let pjNetMsgShown = false;
-function onPeerErr(e) {
-  const netish = ["network", "server-error", "socket-error", "socket-closed", "ssl-unavailable", "browser-incompatible"].includes(e.type);
-  if (netish) {
-    setStatus("ต่อเซิร์ฟเวอร์จับคู่ไม่ได้ (เน็ต?)", "");
-    if (!pjNetMsgShown) {
-      pjNetMsgShown = true;
-      logLine("err", "รหัสห้องต้องมีเน็ตตอนจับคู่ — ต่อ broker ไม่ได้", "→ ใช้ \"โหมด offline แลกรหัสเอง\" ด้านล่างแทน (ไม่ง้อเน็ต)");
-      const d = document.querySelector("details.off"); if (d) d.open = true;
-    }
-  } else { setStatus("ผิดพลาด: " + e.type, ""); }
-  scheduleReconnect();
-}
-function tryHost(code) {
-  const peer = new Peer("wbsync-" + code, { config: { iceServers: [] } });
-  pjPeer = peer;
-  peer.on("open", () => { pjIsHost = true; pjNetMsgShown = false; setStatus("รออีกเครื่องเข้าห้อง " + code + "…", "wait"); });
-  peer.on("connection", (conn) => bindConn(conn));
-  peer.on("disconnected", () => { try { peer.reconnect(); } catch {} });
-  peer.on("error", (e) => {
-    if (e.type === "unavailable-id") { try { peer.destroy(); } catch {} pjPeer = null; tryJoin(code); }
-    else onPeerErr(e);
-  });
-}
-function tryJoin(code) {
-  const peer = new Peer({ config: { iceServers: [] } });
-  pjPeer = peer;
-  peer.on("open", () => { pjIsHost = false; pjNetMsgShown = false; bindConn(peer.connect("wbsync-" + code, { reliable: true })); });
-  peer.on("disconnected", () => { try { peer.reconnect(); } catch {} });
-  peer.on("error", onPeerErr);
-}
-function leaveRoom() {
-  pjStop = true; pjCode = null; clearTimeout(pjReTimer);
-  localStorage.removeItem(ROOM_KEY); cleanupPeer();
-  roomBtn("เชื่อมต่อ", false); $("roomLeave").style.display = "none";
-  setStatus("ออกจากห้องแล้ว", "");
-}
-$("roomConnect").addEventListener("click", () => connectRoom($("roomCode").value));
-$("roomLeave").addEventListener("click", leaveRoom);
-$("roomCode").addEventListener("keydown", (e) => { if (e.key === "Enter") connectRoom($("roomCode").value); });
-(function autoRoom() {   // ต่อใหม่อัตโนมัติหลัง refresh ถ้าเคยตั้งรหัสห้องไว้
-  const saved = localStorage.getItem(ROOM_KEY);
-  if (saved) { $("roomCode").value = saved; if (window.Peer) connectRoom(saved, true); }
-})();
 
 // ================= log + stats =================
 let nUp = 0, nDown = 0, nConf = 0;
@@ -805,7 +692,6 @@ cl.addEventListener("drop", (e) => { [...(e.dataTransfer?.files || [])].forEach(
 window.SYNC = {
   initMem(files) { store = memStore(files); },
   put(path, text) { return store.write(path, new Blob([text])); },
-  connectRoom: (c) => connectRoom(c),
   pullAll: pullAll,
   sendChat: (t) => { $("chatInput").value = t; sendChatText(); },
   sendChatFile: (name, text) => sendChatFile(new File([text], name, { type: "text/plain" })),
