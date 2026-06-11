@@ -78,20 +78,6 @@
   <p class="hint" style="margin-top:-6px">ซิงค์โฟลเดอร์สองทางระหว่าง 2 เครื่องบน LAN (P2P, offline) · Chrome/Edge เท่านั้น ·
     <a href="index.html">→ ไปหน้าแชต</a></p>
 
-  <!-- ดาวน์โหลดแอป Mac (สำหรับเครือข่ายที่บล็อก WebRTC เช่น Zscaler) -->
-  <div class="card" style="border-color:var(--accent)">
-    <div class="row">
-      <a href="https://github.com/NumpolPoldongnok/webbeam/releases/latest/download/FileBeam.dmg" download>
-        <button>⬇️ ดาวน์โหลดแอป Mac (.dmg)</button></a>
-      <span class="hint" style="flex:1; min-width:200px">เครือข่ายบล็อก WebRTC (เช่น <b>Zscaler</b>)? ใช้แอป native แทน — ส่งไฟล์แบบ AirDrop ตรงระหว่างเครื่อง ไม่ผ่านเน็ต/proxy</span>
-    </div>
-    <details class="off"><summary>วิธีติดตั้ง (ครั้งแรกต้องข้าม Gatekeeper)</summary>
-      <p class="hint" style="margin-top:8px">1. เปิด <code>FileBeam.dmg</code> → ลาก <b>FileBeam</b> ไปที่ <b>Applications</b><br>
-        2. ครั้งแรก: <b>คลิกขวา</b>ที่ FileBeam → <b>Open</b> → <b>Open</b> (เพราะเซ็นแบบ ad-hoc)<br>
-        3. หรือรันใน Terminal: <code>xattr -dr com.apple.quarantine /Applications/FileBeam.app</code><br>
-        Universal (Apple Silicon + Intel) · macOS 13+ · ครั้งแรกระบบถาม "Local Network" → กด Allow</p>
-    </details>
-  </div>
 
   <!-- การเชื่อมต่อ -->
   <details class="conn" id="connPanel" open>
