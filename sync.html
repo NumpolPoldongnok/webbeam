@@ -67,16 +67,36 @@
   details.off[open]>summary::before{content:"▾ ";}
   .roombox{display:flex; gap:8px; align-items:center; flex-wrap:wrap;}
   .roombox input{flex:1; min-width:120px; text-transform:uppercase; letter-spacing:2px; font-family:ui-monospace,monospace;}
+  /* แท็บ + แชต */
+  .tabs{display:flex; gap:6px; margin-bottom:12px;}
+  .tabs button{flex:1; background:var(--card); color:var(--muted); border:1px solid var(--line); border-radius:10px; padding:9px;}
+  .tabs button.on{background:var(--accent); color:#fff; border-color:transparent;}
+  .badge{background:var(--red); color:#fff; border-radius:10px; padding:0 6px; font-size:11px; margin-left:4px;}
+  #chatLog{min-height:240px; max-height:52vh; overflow-y:auto; display:flex; flex-direction:column; gap:9px; padding:6px 2px;}
+  #chatLog.drag{outline:2px dashed var(--accent); outline-offset:-5px; border-radius:10px;}
+  .cempty{margin:auto; color:var(--muted); font-size:14px; text-align:center;}
+  .msg{display:flex; flex-direction:column; max-width:84%;}
+  .msg.out{align-self:flex-end; align-items:flex-end;} .msg.in{align-self:flex-start; align-items:flex-start;}
+  .cmeta{font-size:11px; color:var(--muted); margin:0 4px 3px;}
+  .bubble{background:var(--card2); border:1px solid var(--line); border-radius:14px; padding:9px 12px; font-size:14px; word-break:break-word; white-space:pre-wrap;}
+  .msg.out .bubble{background:#2b5dd6; border-color:transparent; color:#fff;}
+  .bubble.code{padding:0; overflow:hidden; white-space:normal; width:100%;}
+  .codehead{display:flex; align-items:center; gap:8px; padding:6px 10px; background:rgba(255,255,255,.06); font-size:11px; color:var(--muted);}
+  .bubble.file{display:flex; align-items:center; gap:10px;}
+  .composer{margin-top:10px; padding-top:10px; border-top:1px solid var(--line);}
+  .composer textarea{min-height:42px; max-height:200px;}
+  .ctools{display:flex; align-items:center; gap:8px; margin-top:8px;}
+  pre{margin:0; padding:10px 12px; overflow-x:auto; font-family:ui-monospace,Menlo,monospace; font-size:12.5px; line-height:1.45; background:#0c0e12; color:#d6dae0; white-space:pre;}
+  .msg.out pre{background:#0c2050; color:#dbe6ff;}
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>🔄 WebBeam Sync</h1>
+    <h1>🔄 WebBeam</h1>
     <div class="status"><span class="dot" id="dot"></span><span id="status">ยังไม่เชื่อมต่อ</span></div>
   </header>
-  <p class="hint" style="margin-top:-6px">ซิงค์โฟลเดอร์สองทางระหว่าง 2 เครื่องบน LAN (P2P, offline) · Chrome/Edge เท่านั้น ·
-    <a href="index.html">→ ไปหน้าแชต</a></p>
+  <p class="hint" style="margin-top:-6px">แชต + ซิงค์โฟลเดอร์ ระหว่าง 2 เครื่องบน LAN (P2P, offline) · connection เดียวกัน ทำพร้อมกันได้ · Chrome/Edge</p>
 
 
   <!-- การเชื่อมต่อ -->
@@ -127,6 +147,29 @@
     </div></div>
   </details>
 
+  <!-- แท็บ: แชต / ซิงค์ (ใช้ connection เดียวกัน) -->
+  <div class="tabs">
+    <button id="tabSync" class="on">🔄 ซิงค์โฟลเดอร์</button>
+    <button id="tabChat">💬 แชต <span id="chatBadge" class="badge" style="display:none">0</span></button>
+  </div>
+
+  <!-- พาเนลแชต -->
+  <div id="chatPane" class="hidden">
+    <div id="chatLog"><div class="cempty" id="chatEmpty">เชื่อมต่อแล้วเริ่มคุยได้เลย · ลากไฟล์มาวางในนี้เพื่อส่ง</div></div>
+    <div class="composer">
+      <textarea id="chatInput" rows="1" placeholder="พิมพ์ข้อความ… (Enter ส่ง · Shift+Enter ขึ้นบรรทัด)"></textarea>
+      <div class="ctools">
+        <button class="ghost sm" id="chatCodeBtn" title="ส่งเป็นบล็อกโค้ด">&lt;/&gt; โค้ด</button>
+        <button class="ghost sm" id="chatAttach" title="แนบไฟล์">📎 ไฟล์</button>
+        <input type="file" id="chatFileInput" multiple class="hidden">
+        <span style="flex:1"></span>
+        <button id="chatSend">ส่ง</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- พาเนลซิงค์ -->
+  <div id="syncPane">
   <!-- โฟลเดอร์ -->
   <div class="card">
     <h2>โฟลเดอร์ที่จะซิงค์</h2>
@@ -162,6 +205,7 @@
     <h2>บันทึก</h2>
     <div id="log"></div>
   </div>
+  </div><!-- /syncPane -->
 </div>
 
 <div id="scanModal" class="scanModal hidden"><div class="scanBox">
@@ -567,32 +611,56 @@ async function onPeerManifest(remoteFiles) {
   }
 }
 
-// ---- รับไฟล์: เขียนทับทันที (ไม่ hash ไม่เช็ค) ----
+// ---- send-lock: การส่งไฟล์ (chat/sync) ต้องไม่สลับ chunk กัน ----
+let _sendBusy = false; const _sendWaiters = [];
+async function sendLock() { if (!_sendBusy) { _sendBusy = true; return; } await new Promise(r => _sendWaiters.push(r)); }
+function sendUnlock() { const w = _sendWaiters.shift(); if (w) w(); else _sendBusy = false; }
+async function streamFile(meta, blob) {   // meta.kind = 'sync' | 'chat'
+  await sendLock();
+  try {
+    channel.send(JSON.stringify({ t: "fstart", ...meta, size: blob.size }));
+    const nm = (meta.path || meta.name || "file").split("/").pop();
+    let off = 0; setProgress("📤 ส่ง " + nm, blob.size ? 0 : 1);
+    while (off < blob.size) {
+      if (channel.bufferedAmount > HIGH_WATER) await waitDrain();
+      const buf = await blob.slice(off, off + CHUNK).arrayBuffer(); channel.send(buf); off += buf.byteLength;
+      setProgress("📤 ส่ง " + nm, off / blob.size);
+    }
+    channel.send(JSON.stringify({ t: "fend" }));
+    nUp++; refreshStats();
+  } finally { sendUnlock(); }
+}
+
+// ---- รับ: route ตาม kind (sync=เขียนทับโฟลเดอร์, chat=ขึ้นในแชต) ----
 let incoming = null, pullGot = 0;
 async function onMessage(e) {
   if (typeof e.data === "string") {
     let m; try { m = JSON.parse(e.data); } catch { return; }
     if (m.t === "hello") { peerName = m.name || "อีกเครื่อง"; onConnected(); }
+    else if (m.t === "chat") addChat({ dir: "in", kind: "chat", text: m.text, code: !!m.code, ts: m.ts || Date.now(), sender: m.name || peerName });
     else if (m.t === "nofolder") { logLine("err", "อีกเครื่องยังไม่ได้เลือกโฟลเดอร์", "— ให้ " + peerName + " กด \"เลือกโฟลเดอร์…\""); setProgress(null); }
-    else if (m.t === "pullall") sendAllFiles();           // อีกเครื่องขอ → ส่งทั้งหมดให้
-    else if (m.t === "fstart") { incoming = { meta: m, parts: [], received: 0 }; setProgress("📥 รับ " + m.path.split("/").pop(), m.size ? 0 : null); }
-    else if (m.t === "fend") await applyIncoming();
+    else if (m.t === "pullall") sendAllFiles();
+    else if (m.t === "fstart") { incoming = { meta: m, parts: [], received: 0 }; if (m.kind === "sync") setProgress("📥 รับ " + (m.path || "").split("/").pop(), m.size ? 0 : null); }
+    else if (m.t === "fend") await finishIncoming();
     else if (m.t === "pulldone") { logLine("down", "✅ ดึงเสร็จจาก " + peerName, "แทนที่ " + pullGot + " ไฟล์"); pullGot = 0; setProgress(null); }
     return;
   }
   if (incoming) { incoming.parts.push(e.data); incoming.received += e.data.byteLength;
-    const sz = incoming.meta.size; setProgress("📥 รับ " + incoming.meta.path.split("/").pop(), sz ? incoming.received / sz : null); }
+    if (incoming.meta.kind === "sync") { const sz = incoming.meta.size; setProgress("📥 รับ " + incoming.meta.path.split("/").pop(), sz ? incoming.received / sz : null); } }
 }
-async function applyIncoming() {
-  const inc = incoming; incoming = null; if (!inc || !store) return;
+async function finishIncoming() {
+  const inc = incoming; incoming = null; if (!inc) return;
+  const blob = new Blob(inc.parts);
+  if (inc.meta.kind === "chat") { receiveChatFile(inc.meta, blob); return; }
+  if (!store) return;                                       // sync → เขียนทับ
   try {
-    await store.write(inc.meta.path, new Blob(inc.parts));   // เขียนทับทันที ไม่เช็คอะไร
+    await store.write(inc.meta.path, blob);
     nDown++; pullGot++; refreshStats();
     logLine("down", "← แทนที่", inc.meta.path);
   } catch (e) { logLine("err", "เขียนพลาด", inc.meta.path + " (" + e.message + ")"); }
 }
 
-// ---- กดปุ่ม = ขอดึงไฟล์ทั้งหมดจากอีกเครื่องมาแทนที่ ----
+// ---- ซิงค์: กดปุ่ม = ดึงทั้งหมดมาแทนที่ ----
 function pullAll() {
   if (!channel || channel.readyState !== "open") { logLine("err", "ดึงไม่ได้", "ยังไม่เชื่อมต่ออีกเครื่อง"); return; }
   if (!store) { logLine("err", "ดึงไม่ได้", "ยังไม่ได้เลือกโฟลเดอร์"); return; }
@@ -600,7 +668,6 @@ function pullAll() {
   setProgress("รอ " + peerName + " ส่งไฟล์…", null);
   channel.send(JSON.stringify({ t: "pullall" }));
 }
-// ---- อีกฝั่งถูกขอ → ส่งไฟล์ทั้งหมด (ไม่ hash) ----
 let sendingAll = false;
 async function sendAllFiles() {
   if (!store) { try { channel.send(JSON.stringify({ t: "nofolder" })); } catch {} return; }
@@ -609,25 +676,92 @@ async function sendAllFiles() {
     const list = await store.list();
     refreshStats(list.length);
     logLine("up", "ส่งไฟล์ทั้งหมดให้ " + peerName, list.length + " ไฟล์");
-    for (let i = 0; i < list.length; i++) await pushRaw(list[i].path, i + 1, list.length);
+    for (let i = 0; i < list.length; i++) { const b = await store.read(list[i].path); await streamFile({ kind: "sync", path: list[i].path }, b); }
     channel.send(JSON.stringify({ t: "pulldone" }));
   } catch (e) { logLine("err", "ส่งพลาด", e.message); }
   finally { sendingAll = false; setProgress(null); }
 }
-async function pushRaw(path, idx, total) {
-  const blob = await store.read(path);
-  const name = path.split("/").pop();
-  channel.send(JSON.stringify({ t: "fstart", path, size: blob.size }));
-  let off = 0; setProgress("📤 (" + idx + "/" + total + ") ส่ง " + name, blob.size ? 0 : 1);
-  while (off < blob.size) {
-    if (channel.bufferedAmount > HIGH_WATER) await waitDrain();
-    const buf = await blob.slice(off, off + CHUNK).arrayBuffer(); channel.send(buf); off += buf.byteLength;
-    setProgress("📤 (" + idx + "/" + total + ") ส่ง " + name, off / blob.size);
-  }
-  channel.send(JSON.stringify({ t: "fend" }));
-  nUp++; refreshStats();
-}
 $("syncNow").addEventListener("click", pullAll);
+
+// ================= แชต (ใช้ connection เดียวกัน ทำงานพร้อม sync) =================
+const CHAT_KEY = "webbeam.chat";
+let chatHist = (() => { try { return JSON.parse(localStorage.getItem(CHAT_KEY) || "[]"); } catch { return []; } })();
+function saveChat() { try { localStorage.setItem(CHAT_KEY, JSON.stringify(chatHist.slice(-500))); } catch {} }
+let chatUnseen = 0;
+
+function addChat(msg, opts = {}) {
+  $("chatEmpty") && $("chatEmpty").remove();
+  $("chatLog").appendChild(renderChat(msg));
+  $("chatLog").scrollTop = $("chatLog").scrollHeight;
+  if (opts.persist !== false) { const { _url, ...rest } = msg; chatHist.push(rest); saveChat(); }
+  if (msg.dir === "in" && !$("tabChat").classList.contains("on")) { chatUnseen++; $("chatBadge").textContent = chatUnseen; $("chatBadge").style.display = "inline-block"; }
+}
+function renderChat(m) {
+  const w = document.createElement("div"); w.className = "msg " + (m.dir === "out" ? "out" : "in");
+  const meta = document.createElement("div"); meta.className = "cmeta";
+  meta.textContent = (m.dir === "out" ? "คุณ" : (m.sender || peerName)) + " · " + new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  w.appendChild(meta);
+  if (m.kind === "chat" && !m.code) { const b = document.createElement("div"); b.className = "bubble"; b.textContent = m.text; w.appendChild(b); }
+  else if (m.kind === "chat" && m.code) { w.appendChild(chatCode(m.text, "โค้ด", null)); }
+  else if (m.kind === "file") {
+    if (m.code && m.content != null) w.appendChild(chatCode(m.content, m.fname, m));
+    else w.appendChild(chatFile(m));
+  }
+  return w;
+}
+function chatCode(text, label, fileMsg) {
+  const b = document.createElement("div"); b.className = "bubble code";
+  const head = document.createElement("div"); head.className = "codehead";
+  const fn = document.createElement("span"); fn.textContent = label; fn.style.fontWeight = "600";
+  const acts = document.createElement("div"); acts.style.marginLeft = "auto"; acts.style.display = "flex"; acts.style.gap = "6px";
+  const cp = document.createElement("button"); cp.className = "ghost sm"; cp.textContent = "คัดลอก";
+  cp.onclick = async () => { try { await navigator.clipboard.writeText(text); } catch {} cp.textContent = "✓"; setTimeout(() => cp.textContent = "คัดลอก", 1000); };
+  acts.appendChild(cp);
+  if (fileMsg) { const sv = chatSave(fileMsg); if (sv) acts.appendChild(sv); }
+  head.appendChild(fn); head.appendChild(acts);
+  const pre = document.createElement("pre"); pre.textContent = text;
+  b.appendChild(head); b.appendChild(pre); return b;
+}
+function chatFile(m) {
+  const b = document.createElement("div"); b.className = "bubble file";
+  b.innerHTML = '<span style="font-size:20px">📄</span>';
+  const fm = document.createElement("div"); fm.style.flex = "1";
+  fm.innerHTML = '<div style="font-weight:600;font-size:13px"></div><div class="hint"></div>';
+  fm.children[0].textContent = m.fname; fm.children[1].textContent = fmtBytes(m.size);
+  b.appendChild(fm); const sv = chatSave(m); if (sv) b.appendChild(sv); return b;
+}
+function chatSave(m) {
+  const btn = document.createElement("button"); btn.className = "ghost sm"; btn.textContent = "บันทึก";
+  if (m._url) btn.onclick = () => dl(m._url, m.fname);
+  else if (m.content != null) btn.onclick = () => { const u = URL.createObjectURL(new Blob([m.content], { type: m.mime || "text/plain" })); dl(u, m.fname); setTimeout(() => URL.revokeObjectURL(u), 8000); };
+  else { btn.disabled = true; btn.title = "ไฟล์หมดอายุ — ส่งใหม่"; }
+  return btn;
+}
+function dl(url, name) { const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); }
+const TEXT_EXT = new Set(["txt","md","json","xml","yaml","yml","js","mjs","ts","tsx","jsx","html","css","scss","py","rb","php","go","rs","java","kt","swift","c","cc","cpp","h","cs","sh","sql","csv","log","gitignore","plist"]);
+function isTextLike(name, mime) { if (mime && mime.startsWith("text/")) return true; const e = (name.split(".").pop() || "").toLowerCase(); return TEXT_EXT.has(e); }
+
+let chatCodeMode = false;
+function sendChatText() {
+  const ta = $("chatInput"); const text = ta.value;
+  if (!text.trim() || !channel || channel.readyState !== "open") { if (!channel || channel.readyState !== "open") logLine("err", "ส่งข้อความไม่ได้", "ยังไม่เชื่อมต่อ"); return; }
+  const ts = Date.now();
+  channel.send(JSON.stringify({ t: "chat", text, code: chatCodeMode, ts, name: myName || "ไม่ระบุ" }));
+  addChat({ dir: "out", kind: "chat", text, code: chatCodeMode, ts });
+  ta.value = ""; ta.style.height = "auto";
+}
+async function sendChatFile(file) {
+  if (!channel || channel.readyState !== "open") { logLine("err", "ส่งไฟล์ไม่ได้", "ยังไม่เชื่อมต่อ"); return; }
+  let content = null, code = false;
+  if (isTextLike(file.name, file.type) && file.size <= 256 * 1024) { content = await file.text(); code = true; }
+  addChat({ dir: "out", kind: "file", ts: Date.now(), fname: file.name, size: file.size, mime: file.type, content, code, _url: URL.createObjectURL(file) });
+  await streamFile({ kind: "chat", name: file.name, mime: file.type, ts: Date.now(), sender: myName || "ไม่ระบุ" }, file);
+}
+async function receiveChatFile(meta, blob) {
+  let content = null, code = false;
+  if (isTextLike(meta.name, meta.mime) && blob.size <= 256 * 1024) { content = await blob.text(); code = true; }
+  addChat({ dir: "in", kind: "file", ts: meta.ts || Date.now(), sender: meta.sender || peerName, fname: meta.name, size: blob.size, mime: meta.mime, content, code, _url: URL.createObjectURL(blob) });
+}
 
 // ---- เลือกโฟลเดอร์ ----
 if (!window.showDirectoryPicker) {
@@ -645,12 +779,37 @@ $("pickFolder").addEventListener("click", async () => {
   } catch (e) { /* ยกเลิก */ }
 });
 
+// ---- wiring: แท็บ + composer + drag ----
+function showTab(which) {
+  const chat = which === "chat";
+  $("tabChat").classList.toggle("on", chat); $("tabSync").classList.toggle("on", !chat);
+  $("chatPane").classList.toggle("hidden", !chat); $("syncPane").classList.toggle("hidden", chat);
+  if (chat) { chatUnseen = 0; $("chatBadge").style.display = "none"; $("chatInput").focus(); }
+}
+$("tabChat").addEventListener("click", () => showTab("chat"));
+$("tabSync").addEventListener("click", () => showTab("sync"));
+$("chatSend").addEventListener("click", sendChatText);
+$("chatInput").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatText(); } });
+$("chatInput").addEventListener("input", () => { const t = $("chatInput"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 200) + "px"; });
+$("chatCodeBtn").addEventListener("click", () => { chatCodeMode = !chatCodeMode; $("chatCodeBtn").style.background = chatCodeMode ? "var(--accent)" : ""; $("chatCodeBtn").style.color = chatCodeMode ? "#fff" : ""; $("chatInput").focus(); });
+$("chatAttach").addEventListener("click", () => $("chatFileInput").click());
+$("chatFileInput").addEventListener("change", (e) => { [...e.target.files].forEach(sendChatFile); e.target.value = ""; });
+const cl = $("chatLog");
+["dragover", "dragenter"].forEach(ev => cl.addEventListener(ev, (e) => { e.preventDefault(); cl.classList.add("drag"); }));
+["dragleave", "drop"].forEach(ev => cl.addEventListener(ev, (e) => { e.preventDefault(); cl.classList.remove("drag"); }));
+cl.addEventListener("drop", (e) => { [...(e.dataTransfer?.files || [])].forEach(sendChatFile); });
+// โหลดประวัติแชต
+(function () { if (chatHist.length) { $("chatEmpty") && $("chatEmpty").remove(); for (const m of chatHist) $("chatLog").appendChild(renderChat(m)); $("chatLog").scrollTop = $("chatLog").scrollHeight; } })();
+
 // ================= test hooks (ใช้ตอนทดสอบ headless) =================
 window.SYNC = {
   initMem(files) { store = memStore(files); },
   put(path, text) { return store.write(path, new Blob([text])); },
   connectRoom: (c) => connectRoom(c),
   pullAll: pullAll,
+  sendChat: (t) => { $("chatInput").value = t; sendChatText(); },
+  sendChatFile: (name, text) => sendChatFile(new File([text], name, { type: "text/plain" })),
+  chatText: () => $("chatLog").innerText,
   dump: () => store && store.dump ? store.dump() : null,
   stats: () => ({ up: nUp, down: nDown, busy: sendingAll }),
   channelOpen: () => channel && channel.readyState === "open",
