@@ -348,23 +348,36 @@ function connectRoom(code, isRetry) {
   if (!isRetry) logLine("info", "เข้าห้อง", code);
   tryHost(code);
 }
+let pjNetMsgShown = false;
+function onPeerErr(e) {
+  const netish = ["network", "server-error", "socket-error", "socket-closed", "ssl-unavailable", "browser-incompatible"].includes(e.type);
+  if (netish) {
+    setStatus("ต่อเซิร์ฟเวอร์จับคู่ไม่ได้ (เน็ต?)", "");
+    if (!pjNetMsgShown) {
+      pjNetMsgShown = true;
+      logLine("err", "รหัสห้องต้องมีเน็ตตอนจับคู่ — ต่อ broker ไม่ได้", "→ ใช้ \"โหมด offline แลกรหัสเอง\" ด้านล่างแทน (ไม่ง้อเน็ต)");
+      const d = document.querySelector("details.off"); if (d) d.open = true;
+    }
+  } else { setStatus("ผิดพลาด: " + e.type, ""); }
+  scheduleReconnect();
+}
 function tryHost(code) {
   const peer = new Peer("wbsync-" + code, { config: { iceServers: [] } });
   pjPeer = peer;
-  peer.on("open", () => { pjIsHost = true; setStatus("รออีกเครื่องเข้าห้อง " + code + "…", "wait"); });
+  peer.on("open", () => { pjIsHost = true; pjNetMsgShown = false; setStatus("รออีกเครื่องเข้าห้อง " + code + "…", "wait"); });
   peer.on("connection", (conn) => bindConn(conn));
   peer.on("disconnected", () => { try { peer.reconnect(); } catch {} });
   peer.on("error", (e) => {
     if (e.type === "unavailable-id") { try { peer.destroy(); } catch {} pjPeer = null; tryJoin(code); }
-    else { setStatus("ผิดพลาด: " + e.type, ""); scheduleReconnect(); }
+    else onPeerErr(e);
   });
 }
 function tryJoin(code) {
   const peer = new Peer({ config: { iceServers: [] } });
   pjPeer = peer;
-  peer.on("open", () => { pjIsHost = false; bindConn(peer.connect("wbsync-" + code, { reliable: true })); });
+  peer.on("open", () => { pjIsHost = false; pjNetMsgShown = false; bindConn(peer.connect("wbsync-" + code, { reliable: true })); });
   peer.on("disconnected", () => { try { peer.reconnect(); } catch {} });
-  peer.on("error", (e) => { setStatus("ผิดพลาด: " + e.type, ""); scheduleReconnect(); });
+  peer.on("error", onPeerErr);
 }
 function leaveRoom() {
   pjStop = true; pjCode = null; clearTimeout(pjReTimer);
