@@ -171,7 +171,7 @@
     </div>
     <p class="hint" id="fsWarn" style="margin-top:8px"></p>
     <p class="hint" style="margin-top:6px">โหมด: กด "ดึงทั้งหมดมาแทนที่" = เขียนทับไฟล์ในเครื่องนี้ด้วยของอีกเครื่อง (ทางเดียว ไม่เช็ค) ·
-      ไฟล์ที่อีกเครื่องไม่มีจะไม่ถูกลบ · ข้าม <code>.DS_Store</code>, <code>.git</code>, <code>node_modules</code></p>
+      ไฟล์ที่อีกเครื่องไม่มีจะไม่ถูกลบ · ข้ามอัตโนมัติ (ทุกระดับ): <code>.git .build node_modules Pods DerivedData .swiftpm build</code> ฯลฯ — sync เฉพาะ source จริง</p>
   </div>
 
   <!-- ควบคุม sync -->
@@ -217,7 +217,9 @@ const enc = (o) => btoa(unescape(encodeURIComponent(JSON.stringify(o))));
 const dec = (s) => { s = s.trim(); try { return JSON.parse(s); } catch (e) {} return JSON.parse(decodeURIComponent(escape(atob(s)))); };
 const fmtTime = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const CHUNK = 64 * 1024, HIGH_WATER = 8 * 1024 * 1024;
-const IGNORE_TOP = new Set([".DS_Store", ".git", "node_modules", ".svn", ".hg"]);
+// โฟลเดอร์ที่ข้ามทุกระดับ (build cache/regenerate ได้ — กันลาก .build หนักๆ ของ iOS/SPM มาด้วย)
+const IGNORE_DIRS = new Set([".git", "node_modules", ".build", "DerivedData", ".swiftpm", "Pods",
+  "ModuleCache", ".svn", ".hg", ".gradle", "build", ".next", ".cache", "__pycache__", ".venv", "venv", ".idea"]);
 
 let pc = null, channel = null, role = "a";
 let myName = localStorage.getItem("webbeam.syncname") || "";
@@ -400,7 +402,7 @@ let store = null;
 function fsStore(rootHandle) {
   async function walk(dir, base, out) {
     for await (const [name, h] of dir.entries()) {
-      if (base === "" && IGNORE_TOP.has(name)) continue;
+      if (h.kind === "directory" && IGNORE_DIRS.has(name)) continue;   // ข้ามทุกระดับ
       if (name === ".DS_Store") continue;
       const path = base ? base + "/" + name : name;
       if (h.kind === "file") { const f = await h.getFile(); out.push({ path, size: f.size, mtime: f.lastModified }); }
@@ -695,7 +697,7 @@ function sendChatText() {
   ta.value = ""; ta.style.height = "auto";
 }
 async function sendChatFile(file) {
-  if (!channel || channel.readyState !== "open") { logLine("err", "ส่งไฟล์ไม่ได้", "ยังไม่เชื่อมต่อ"); return; }
+  if (!channel || channel.readyState !== "open") { alert("ส่งไฟล์ไม่ได้ — ยังไม่เชื่อมต่ออีกเครื่อง (จุดสถานะต้องเป็น 🟢)"); return; }
   let content = null, code = false;
   if (isTextLike(file.name, file.type) && file.size <= 256 * 1024) { content = await file.text(); code = true; }
   addChat({ dir: "out", kind: "file", ts: Date.now(), fname: file.name, size: file.size, mime: file.type, content, code, _url: URL.createObjectURL(file) });
@@ -738,10 +740,18 @@ $("chatInput").addEventListener("input", () => { const t = $("chatInput"); t.sty
 $("chatCodeBtn").addEventListener("click", () => { chatCodeMode = !chatCodeMode; $("chatCodeBtn").style.background = chatCodeMode ? "var(--accent)" : ""; $("chatCodeBtn").style.color = chatCodeMode ? "#fff" : ""; $("chatInput").focus(); });
 $("chatAttach").addEventListener("click", () => $("chatFileInput").click());
 $("chatFileInput").addEventListener("change", (e) => { [...e.target.files].forEach(sendChatFile); e.target.value = ""; });
-const cl = $("chatLog");
-["dragover", "dragenter"].forEach(ev => cl.addEventListener(ev, (e) => { e.preventDefault(); cl.classList.add("drag"); }));
-["dragleave", "drop"].forEach(ev => cl.addEventListener(ev, (e) => { e.preventDefault(); cl.classList.remove("drag"); }));
-cl.addEventListener("drop", (e) => { [...(e.dataTransfer?.files || [])].forEach(sendChatFile); });
+// กันเบราว์เซอร์เปิด/ดาวน์โหลดไฟล์เมื่อ drop พลาดกรอบ (ทั้งหน้า)
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => e.preventDefault());
+// ลากไฟล์มาวางที่ไหนก็ได้ในแท็บแชต = ส่งไฟล์ (กรอบใหญ่ขึ้น ไม่พลาด)
+const cl = $("chatPane");
+["dragover", "dragenter"].forEach(ev => cl.addEventListener(ev, (e) => { e.preventDefault(); $("chatLog").classList.add("drag"); }));
+["dragleave"].forEach(ev => cl.addEventListener(ev, (e) => { e.preventDefault(); $("chatLog").classList.remove("drag"); }));
+cl.addEventListener("drop", (e) => {
+  e.preventDefault(); $("chatLog").classList.remove("drag");
+  const fs = [...(e.dataTransfer?.files || [])];
+  if (fs.length) fs.forEach(sendChatFile);
+});
 // โหลดประวัติแชต
 (function () { if (chatHist.length) { $("chatEmpty") && $("chatEmpty").remove(); for (const m of chatHist) $("chatLog").appendChild(renderChat(m)); $("chatLog").scrollTop = $("chatLog").scrollHeight; } })();
 
