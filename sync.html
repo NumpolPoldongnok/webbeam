@@ -804,6 +804,8 @@ async function sendBundle(group, label) {
 
 // ---- รับ: route ตาม kind (sync=เขียนทับโฟลเดอร์, chat=ขึ้นในแชต) ----
 let incoming = null, pullGot = 0, pullTotal = 0;
+// ข้อความ progress ฝั่งรับ: โชว์ "รับแล้ว X/Y ไฟล์" เสมอ (X=ไฟล์ที่เขียนเสร็จแล้ว, Y=ทั้งหมด)
+const pprog = () => "📥 รับแล้ว " + pullGot + "/" + (pullTotal || "?") + " ไฟล์";
 // ประมวลผลข้อความแบบเรียงทีละอัน (serialize) — กัน race: pulldone ต้องรอ finishBundle/finishIncoming
 // ของชุดก่อนหน้าให้เขียนไฟล์เสร็จก่อน ไม่งั้น watchdog จะถูก resetWatchdog() ติดใหม่หลังซิงค์จบ → ค้าง
 let recvChain = Promise.resolve();
@@ -818,23 +820,23 @@ async function handleMessage(e) {
     else if (m.t === "haveidx") { if (pullHave) for (const kv of m.e) pullHave[kv[0]] = kv[1]; }
     else if (m.t === "pullgo") { const h = pullHave || {}; pullHave = null; sendAllFiles(h); }
     else if (m.t === "pullinfo") { pullTotal = m.total || 0; pullGot = 0; resetWatchdog();
-      setProgress(pullTotal === 0 ? "✓ เป็นปัจจุบันแล้ว (ไม่มีไฟล์เปลี่ยน)" : ("📥 รับ 0/" + pullTotal + "…"), pullTotal === 0 ? 1 : 0); }
+      setProgress(pullTotal === 0 ? "✓ ไม่มีไฟล์ให้ดึง (โฟลเดอร์อีกเครื่องว่าง)" : ("📥 รับแล้ว 0/" + pullTotal + " ไฟล์…"), pullTotal === 0 ? 1 : 0); }
     else if (m.t === "fstart") { incoming = { meta: m, parts: [], received: 0 }; resetWatchdog();
-      if (m.kind === "sync") setProgress("📥 (" + (pullGot + 1) + "/" + (pullTotal || "?") + ") " + (m.path || "").split("/").pop(), m.size ? 0 : null); }
+      if (m.kind === "sync") setProgress(pprog() + " · " + (m.path || "").split("/").pop(), m.size ? 0 : null); }
     else if (m.t === "fend") await finishIncoming();
     else if (m.t === "bstart") { incoming = { meta: m, parts: [], received: 0, bundle: true }; resetWatchdog();
-      setProgress("📥 (" + (pullGot + 1) + "–" + (pullGot + m.files.length) + "/" + (pullTotal || "?") + ") ชุด " + m.files.length + " ไฟล์", m.size ? 0 : null); }
+      setProgress(pprog() + " · กำลังโหลดชุด " + m.files.length + " ไฟล์", m.size ? 0 : null); }
     else if (m.t === "bend") await finishBundle();
     else if (m.t === "pulldone") {
       saveRecvIndex(); syncBtnIdle();
-      logLine("down", "✅ ดึงเสร็จจาก " + peerName, "รับ/แทนที่ " + pullGot + " ไฟล์" + (m.skipped != null ? " · ข้าม(ไม่เปลี่ยน) " + m.skipped : ""));
-      setProgress("✅ ซิงค์เสร็จ · รับ " + pullGot + " ไฟล์", 1); setTimeout(() => setProgress(null), 1500); pullGot = 0;
+      logLine("down", "✅ ดึงเสร็จจาก " + peerName, "รับ/แทนที่ " + pullGot + "/" + (pullTotal || pullGot) + " ไฟล์");
+      setProgress("✅ ซิงค์เสร็จ · รับครบ " + pullGot + "/" + (pullTotal || pullGot) + " ไฟล์", 1); setTimeout(() => setProgress(null), 1500); pullGot = 0;
     }
     return;
   }
   if (incoming) { incoming.parts.push(e.data); incoming.received += e.data.byteLength;
-    if (incoming.bundle) setProgressFast("📥 ชุด " + incoming.meta.files.length + " ไฟล์", incoming.meta.size ? incoming.received / incoming.meta.size : null);
-    else if (incoming.meta.kind === "sync") { const sz = incoming.meta.size; setProgressFast("📥 (" + (pullGot + 1) + "/" + (pullTotal || "?") + ") " + incoming.meta.path.split("/").pop(), sz ? incoming.received / sz : null); } }
+    if (incoming.bundle) setProgressFast(pprog() + " · กำลังโหลดชุด " + incoming.meta.files.length + " ไฟล์", incoming.meta.size ? incoming.received / incoming.meta.size : null);
+    else if (incoming.meta.kind === "sync") { const sz = incoming.meta.size; setProgressFast(pprog() + " · " + incoming.meta.path.split("/").pop(), sz ? incoming.received / sz : null); } }
 }
 
 async function finishBundle() {
