@@ -241,9 +241,9 @@ function onConnected() {
   setStatus("🟢 เชื่อมต่อกับ " + peerName, "on");
   $("connPanel").open = false;
   $("connSummary").textContent = "🟢 เชื่อมต่อกับ " + peerName;
-  if (store) $("syncNow").disabled = false;
+  syncBtnIdle();
 }
-function onDisconnected(r) { setStatus(r || "หลุดการเชื่อมต่อ", ""); $("syncNow").disabled = true; }
+function onDisconnected(r) { setStatus(r || "หลุดการเชื่อมต่อ", ""); syncBtnIdle(); }
 
 // ================= role =================
 $("roleSeg").addEventListener("click", (e) => {
@@ -558,14 +558,14 @@ async function gzipBlob(b) { return await new Response(b.stream().pipeThrough(ne
 async function gunzipBlob(b) { return await new Response(b.stream().pipeThrough(new DecompressionStream("gzip"))).blob(); }
 function shouldGz(meta, size) { return gzOK() && size > 1024 && size < 50 * 1024 * 1024 && isTextLike(meta.path || meta.name || "", meta.mime); }
 
-async function streamFile(meta, blob) {   // meta.kind = 'sync' | 'chat'
+async function streamFile(meta, blob, label) {   // meta.kind = 'sync' | 'chat'
   await sendLock();
   try {
     let send = blob, gz = false;
     if (shouldGz(meta, blob.size)) { try { const z = await gzipBlob(blob); if (z.size < blob.size * 0.92) { send = z; gz = true; } } catch {} }
     const CH = bestChunk();
     channel.send(JSON.stringify({ t: "fstart", ...meta, size: send.size, gz }));
-    const nm = (meta.path || meta.name || "file").split("/").pop();
+    const nm = (label || "") + (meta.path || meta.name || "file").split("/").pop();
     let off = 0; setProgress("📤 ส่ง " + nm + (gz ? " (zip)" : ""), send.size ? 0 : 1);
     while (off < send.size) {
       if (channel.bufferedAmount > HIGH_WATER) await waitDrain();
@@ -578,23 +578,30 @@ async function streamFile(meta, blob) {   // meta.kind = 'sync' | 'chat'
 }
 
 // ---- รับ: route ตาม kind (sync=เขียนทับโฟลเดอร์, chat=ขึ้นในแชต) ----
-let incoming = null, pullGot = 0;
+let incoming = null, pullGot = 0, pullTotal = 0;
 async function onMessage(e) {
   if (typeof e.data === "string") {
     let m; try { m = JSON.parse(e.data); } catch { return; }
     if (m.t === "hello") { peerName = m.name || "อีกเครื่อง"; onConnected(); }
     else if (m.t === "chat") addChat({ dir: "in", kind: "chat", text: m.text, code: !!m.code, ts: m.ts || Date.now(), sender: m.name || peerName });
-    else if (m.t === "nofolder") { logLine("err", "อีกเครื่องยังไม่ได้เลือกโฟลเดอร์", "— ให้ " + peerName + " กด \"เลือกโฟลเดอร์…\""); setProgress(null); }
+    else if (m.t === "nofolder") { logLine("err", "อีกเครื่องยังไม่ได้เลือกโฟลเดอร์", "— ให้ " + peerName + " กด \"เลือกโฟลเดอร์…\""); syncBtnIdle(); setProgress(null); }
     else if (m.t === "pullbegin") pullHave = {};
     else if (m.t === "haveidx") { if (pullHave) for (const kv of m.e) pullHave[kv[0]] = kv[1]; }
     else if (m.t === "pullgo") { const h = pullHave || {}; pullHave = null; sendAllFiles(h); }
-    else if (m.t === "fstart") { incoming = { meta: m, parts: [], received: 0 }; if (m.kind === "sync") setProgress("📥 รับ " + (m.path || "").split("/").pop(), m.size ? 0 : null); }
+    else if (m.t === "pullinfo") { pullTotal = m.total || 0; pullGot = 0; resetWatchdog();
+      setProgress(pullTotal === 0 ? "✓ เป็นปัจจุบันแล้ว (ไม่มีไฟล์เปลี่ยน)" : ("📥 รับ 0/" + pullTotal + "…"), pullTotal === 0 ? 1 : 0); }
+    else if (m.t === "fstart") { incoming = { meta: m, parts: [], received: 0 }; resetWatchdog();
+      if (m.kind === "sync") setProgress("📥 (" + (pullGot + 1) + "/" + (pullTotal || "?") + ") " + (m.path || "").split("/").pop(), m.size ? 0 : null); }
     else if (m.t === "fend") await finishIncoming();
-    else if (m.t === "pulldone") { saveRecvIndex(); logLine("down", "✅ ดึงเสร็จจาก " + peerName, "รับ/แทนที่ " + pullGot + " ไฟล์" + (m.skipped != null ? " · ข้าม(ไม่เปลี่ยน) " + m.skipped : "")); pullGot = 0; setProgress(null); }
+    else if (m.t === "pulldone") {
+      saveRecvIndex(); syncBtnIdle();
+      logLine("down", "✅ ดึงเสร็จจาก " + peerName, "รับ/แทนที่ " + pullGot + " ไฟล์" + (m.skipped != null ? " · ข้าม(ไม่เปลี่ยน) " + m.skipped : ""));
+      setProgress("✅ ซิงค์เสร็จ · รับ " + pullGot + " ไฟล์", 1); setTimeout(() => setProgress(null), 1500); pullGot = 0;
+    }
     return;
   }
   if (incoming) { incoming.parts.push(e.data); incoming.received += e.data.byteLength;
-    if (incoming.meta.kind === "sync") { const sz = incoming.meta.size; setProgress("📥 รับ " + incoming.meta.path.split("/").pop(), sz ? incoming.received / sz : null); } }
+    if (incoming.meta.kind === "sync") { const sz = incoming.meta.size; setProgress("📥 (" + (pullGot + 1) + "/" + (pullTotal || "?") + ") " + incoming.meta.path.split("/").pop(), sz ? incoming.received / sz : null); } }
 }
 // incremental: จำว่า "เคยรับไฟล์ไหนมาแล้ว" (path -> "size:mtime" ของฝั่งส่ง) เพื่อข้ามไฟล์ที่ไม่เปลี่ยนรอบหน้า
 let recvIndex = {}, recvKey = "webbeam.recv.mem", pullHave = null;
@@ -610,12 +617,16 @@ async function finishIncoming() {
   try {
     await store.write(inc.meta.path, blob);
     if (inc.meta.osize != null && inc.meta.smtime != null) recvIndex[inc.meta.path] = inc.meta.osize + ":" + inc.meta.smtime;
-    nDown++; pullGot++; refreshStats();
+    nDown++; pullGot++; refreshStats(); resetWatchdog();
     logLine("down", "← แทนที่", inc.meta.path);
   } catch (e) { logLine("err", "เขียนพลาด", inc.meta.path + " (" + e.message + ")"); }
 }
 
 // ---- ซิงค์: กดปุ่ม = ดึงเฉพาะที่เปลี่ยน (incremental) จากอีกเครื่องมาแทนที่ ----
+let syncWatchdog = null;
+function syncBtnIdle() { $("syncNow").textContent = "⬇️ ดึงเฉพาะที่เปลี่ยน"; $("syncNow").disabled = !(channel && channel.readyState === "open" && store); clearTimeout(syncWatchdog); syncWatchdog = null; }
+function resetWatchdog() { clearTimeout(syncWatchdog); syncWatchdog = setTimeout(() => { logLine("err", "ซิงค์ค้าง", "ไม่ตอบสนอง 60 วิ — หยุด"); syncBtnIdle(); setProgress(null); }, 60000); }
+
 function pullAll() {
   if (!channel || channel.readyState !== "open") { logLine("err", "ดึงไม่ได้", "ยังไม่เชื่อมต่ออีกเครื่อง"); return; }
   if (!store) { logLine("err", "ดึงไม่ได้", "ยังไม่ได้เลือกโฟลเดอร์"); return; }
@@ -623,7 +634,10 @@ function pullAll() {
   const have = force ? {} : recvIndex;
   const entries = Object.entries(have);
   logLine("info", "⬇️ ขอดึงจาก " + peerName, force ? "(ดึงใหม่ทั้งหมด)" : ("มีอยู่ " + entries.length + " ไฟล์ → ขอเฉพาะที่เปลี่ยน"));
-  setProgress("รอ " + peerName + " ส่งไฟล์…", null);
+  $("syncNow").disabled = true; $("syncNow").textContent = "⏳ กำลังซิงค์…";
+  pullTotal = 0; pullGot = 0;
+  setProgress("⏳ ขอรายการจาก " + peerName + "…", null);
+  resetWatchdog();
   channel.send(JSON.stringify({ t: "pullbegin" }));
   const BATCH = 200;   // ส่ง index เป็นชุดละ 200 กันเกิน maxMessageSize
   for (let i = 0; i < entries.length; i += BATCH) channel.send(JSON.stringify({ t: "haveidx", e: entries.slice(i, i + BATCH) }));
@@ -640,10 +654,11 @@ async function sendAllFiles(have) {
     refreshStats(list.length);
     const toSend = list.filter(e => have[e.path] !== (e.size + ":" + e.mtime));   // ข้ามไฟล์ที่ฝั่งโน้นมีอยู่แล้วและไม่เปลี่ยน
     skipped = list.length - toSend.length;
+    channel.send(JSON.stringify({ t: "pullinfo", total: toSend.length }));        // บอกผู้รับว่าจะส่งกี่ไฟล์ (ทำ progress รวม)
     logLine("up", "ส่งให้ " + peerName, "ส่ง " + toSend.length + " · ข้าม(ไม่เปลี่ยน) " + skipped);
     for (let i = 0; i < toSend.length; i++) {
       const e = toSend[i]; const b = await store.read(e.path);
-      await streamFile({ kind: "sync", path: e.path, osize: e.size, smtime: e.mtime }, b); sent++;
+      await streamFile({ kind: "sync", path: e.path, osize: e.size, smtime: e.mtime }, b, "(" + (i + 1) + "/" + toSend.length + ") "); sent++;
     }
     channel.send(JSON.stringify({ t: "pulldone", sent, skipped }));
   } catch (e) { logLine("err", "ส่งพลาด", e.message); }
