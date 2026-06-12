@@ -83,6 +83,8 @@
   .msg.out .bubble{background:#2b5dd6; border-color:transparent; color:#fff;}
   .bubble.code{padding:0; overflow:hidden; white-space:normal; width:100%;}
   .codehead{display:flex; align-items:center; gap:8px; padding:6px 10px; background:rgba(255,255,255,.06); font-size:11px; color:var(--muted);}
+  .codefoot{display:flex; justify-content:flex-end; padding:6px 10px; background:rgba(255,255,255,.04); border-top:1px solid var(--line);}
+  .copyfoot{margin-top:3px;}
   .bubble.file{display:flex; align-items:center; gap:10px;}
   .composer{margin-top:10px; padding-top:10px; border-top:1px solid var(--line);}
   .composer textarea{min-height:42px; max-height:200px;}
@@ -1023,7 +1025,11 @@ function renderChat(m) {
   const meta = document.createElement("div"); meta.className = "cmeta";
   meta.textContent = (m.dir === "out" ? "คุณ" : (m.sender || peerName)) + " · " + new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   w.appendChild(meta);
-  if (m.kind === "chat" && !m.code) { const b = document.createElement("div"); b.className = "bubble"; b.textContent = m.text; w.appendChild(b); }
+  if (m.kind === "chat" && !m.code) {
+    const b = document.createElement("div"); b.className = "bubble"; b.textContent = m.text; w.appendChild(b);
+    // ข้อความยาว/หลายบรรทัด → มีปุ่มคัดลอกด้านล่างด้วย ไม่ต้องเลื่อนขึ้นไปหา
+    if (m.text && (m.text.length > 120 || m.text.includes("\n"))) { const f = document.createElement("div"); f.className = "copyfoot"; f.appendChild(copyBtn(m.text, "📋 คัดลอก")); w.appendChild(f); }
+  }
   else if (m.kind === "chat" && m.code) { w.appendChild(chatCode(m.text, "โค้ด", null)); }
   else if (m.kind === "file") {
     if (m.code && m.content != null) w.appendChild(chatCode(m.content, m.fname, m));
@@ -1031,18 +1037,24 @@ function renderChat(m) {
   }
   return w;
 }
+function copyBtn(text, label) {
+  const cp = document.createElement("button"); cp.className = "ghost sm"; cp.textContent = label || "คัดลอก";
+  cp.onclick = async () => { try { await navigator.clipboard.writeText(text); } catch {} const o = cp.textContent; cp.textContent = "✓ คัดลอกแล้ว"; setTimeout(() => cp.textContent = o, 1000); };
+  return cp;
+}
 function chatCode(text, label, fileMsg) {
   const b = document.createElement("div"); b.className = "bubble code";
   const head = document.createElement("div"); head.className = "codehead";
   const fn = document.createElement("span"); fn.textContent = label; fn.style.fontWeight = "600";
   const acts = document.createElement("div"); acts.style.marginLeft = "auto"; acts.style.display = "flex"; acts.style.gap = "6px";
-  const cp = document.createElement("button"); cp.className = "ghost sm"; cp.textContent = "คัดลอก";
-  cp.onclick = async () => { try { await navigator.clipboard.writeText(text); } catch {} cp.textContent = "✓"; setTimeout(() => cp.textContent = "คัดลอก", 1000); };
-  acts.appendChild(cp);
+  acts.appendChild(copyBtn(text));
   if (fileMsg) { const sv = chatSave(fileMsg); if (sv) acts.appendChild(sv); }
   head.appendChild(fn); head.appendChild(acts);
   const pre = document.createElement("pre"); pre.textContent = text;
-  b.appendChild(head); b.appendChild(pre); return b;
+  b.appendChild(head); b.appendChild(pre);
+  // ปุ่มคัดลอกด้านล่างด้วย — ข้อความยาวๆ อ่านจบแล้วกดได้เลย ไม่ต้องเลื่อนกลับขึ้นหัว
+  const foot = document.createElement("div"); foot.className = "codefoot"; foot.appendChild(copyBtn(text, "📋 คัดลอกข้อความ"));
+  b.appendChild(foot); return b;
 }
 function fmtBytes(n) {
   if (n == null || isNaN(n)) return "";
