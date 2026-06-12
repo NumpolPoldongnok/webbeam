@@ -67,10 +67,11 @@
   details.off[open]>summary::before{content:"▾ ";}
   .roombox{display:flex; gap:8px; align-items:center; flex-wrap:wrap;}
   .roombox input{flex:1; min-width:120px; text-transform:uppercase; letter-spacing:2px; font-family:ui-monospace,monospace;}
-  /* แท็บ + แชต */
-  .tabs{display:flex; gap:6px; margin-bottom:12px;}
-  .tabs button{flex:1; background:var(--card); color:var(--muted); border:1px solid var(--line); border-radius:10px; padding:9px;}
-  .tabs button.on{background:var(--accent); color:#fff; border-color:transparent;}
+  /* แท็บ + แชต — แยกโหมดชัด: ซิงค์=ฟ้า แชต=เขียว แท็บใหญ่ขึ้น */
+  .tabs{display:flex; gap:8px; margin-bottom:14px;}
+  .tabs button{flex:1; background:var(--card); color:var(--muted); border:1px solid var(--line); border-radius:12px; padding:12px; font-size:15px; font-weight:600;}
+  .tabs button.on{background:var(--accent); color:#fff; border-color:transparent; box-shadow:0 2px 10px rgba(79,140,255,.35);}
+  .tabs #tabChat.on{background:var(--green); box-shadow:0 2px 10px rgba(52,199,89,.35);}
   .badge{background:var(--red); color:#fff; border-radius:10px; padding:0 6px; font-size:11px; margin-left:4px;}
   #chatLog{min-height:240px; max-height:52vh; overflow-y:auto; display:flex; flex-direction:column; gap:9px; padding:6px 2px;}
   #chatLog.drag{outline:2px dashed var(--accent); outline-offset:-5px; border-radius:10px;}
@@ -108,9 +109,15 @@
         <input type="text" id="myName" placeholder="เช่น MacA" style="flex:1; min-width:120px">
       </div>
 
+      <!-- เลือกวิธีเชื่อมต่อ: Hotspot (อัตโนมัติ) / Manual (แลกรหัส) — โชว์ทีละโหมด ไม่ปนกัน -->
+      <div class="seg" id="connModeSeg" style="margin-bottom:12px">
+        <button data-cmode="hotspot" class="on">🔥 Hotspot — อัตโนมัติ</button>
+        <button data-cmode="manual">✋ Manual — แลกรหัส</button>
+      </div>
+
       <!-- 🔥 โหมด Hotspot: เชื่อมอัตโนมัติ ไม่ต้องแลกรหัส (มี broker บนเครื่องเดียว) -->
-      <div style="border:1px solid var(--accent); border-radius:10px; padding:12px; margin-bottom:14px">
-        <p class="step" style="margin-bottom:8px">🔥 <b>โหมด Hotspot — เชื่อมอัตโนมัติ ไม่ต้องแลกรหัส</b> · หลุดแล้วต่อกลับเอง</p>
+      <div id="connHotspot" style="border:1px solid var(--accent); border-radius:10px; padding:12px; margin-bottom:14px">
+        <p class="step" style="margin-bottom:8px">🔥 <b>เชื่อมอัตโนมัติ ไม่ต้องแลกรหัส</b> · หลุดแล้วต่อกลับเอง (รัน broker บนเครื่องหลักเครื่องเดียว)</p>
         <div class="row" style="margin-bottom:8px">
           <div class="seg" id="brokerRoleSeg">
             <button data-brole="host" class="on">เครื่องหลัก (รัน broker)</button>
@@ -127,7 +134,9 @@
         <p class="hint" id="brokerHint" style="margin-top:8px"><b>เครื่องหลัก:</b> เปิด Terminal ไปที่โฟลเดอร์ WebBeam รัน <code>node broker.mjs</code> → มันจะบอก IP · ใส่ Broker IP = <code>localhost</code> แล้วกด "เริ่มอัตโนมัติ" · <b>อีกเครื่อง:</b> ใส่ IP ที่ broker บอก แล้วกด "เริ่มอัตโนมัติ" — เชื่อมเอง</p>
       </div>
 
-      <p class="step">หรือเชื่อมแบบ manual (ไม่ต้องมี broker) — เลือกบทบาท แล้วแลกรหัส/สแกน QR</p>
+      <!-- ✋ โหมด Manual: แลกรหัส/สแกน QR (ไม่ต้องมี broker) -->
+      <div id="connManual" class="hidden">
+      <p class="step">✋ <b>เชื่อมแบบ manual</b> — เลือกบทบาท แล้วแลกรหัส/สแกน QR (ไม่ต้องมี broker)</p>
       <div class="seg" id="roleSeg" style="margin-top:4px">
         <button data-role="a" class="on">เริ่ม (A)</button>
         <button data-role="b">เข้าร่วม (B)</button>
@@ -150,6 +159,7 @@
         <textarea id="answerOut" placeholder="รหัสตอบกลับ…" readonly></textarea>
         <div class="qrbox hidden" id="answerQR"></div>
       </div>
+      </div><!-- /connManual -->
       <div class="row" style="margin-top:12px">
         <span class="hint">IP เครื่องนี้ (LAN)</span>
         <input type="text" id="myIP" placeholder="เช่น 192.168.1.23 — ใส่ถ้าเครือข่ายบล็อก mDNS แล้วต่อไม่ติด" style="flex:1; min-width:200px">
@@ -197,8 +207,22 @@
     </div>
     <p class="hint" style="margin-top:6px">💡 เครื่องจำโฟลเดอร์ล่าสุดไว้ — เปิดหน้าใหม่กดปุ่มเดียวใช้ต่อได้เลย ไม่ต้องไล่หาโฟลเดอร์ใหม่</p>
     <p class="hint" id="fsWarn" style="margin-top:8px"></p>
-    <p class="hint" style="margin-top:6px">โหมด: กด "ดึงทั้งหมดมาแทนที่" = เขียนทับไฟล์ในเครื่องนี้ด้วยของอีกเครื่อง (ทางเดียว ไม่เช็ค) ·
-      ไฟล์ที่อีกเครื่องไม่มีจะไม่ถูกลบ · ข้ามอัตโนมัติ (ทุกระดับ): <code>.git .build node_modules Pods DerivedData .swiftpm build</code> ฯลฯ — sync เฉพาะ source จริง</p>
+    <p class="hint" style="margin-top:6px">กด "ดึงทั้งหมดมาแทนที่" = เขียนทับไฟล์ในเครื่องนี้ด้วยของอีกเครื่อง (ทางเดียว ไม่เช็ค) ·
+      ไฟล์ที่อีกเครื่องไม่มีจะไม่ถูกลบ · ไฟล์ build/auto-generate ถูกข้ามอัตโนมัติ — ดูการ์ด "🚫 ไฟล์ที่ข้าม" ด้านล่าง</p>
+  </div>
+
+  <!-- ตั้งค่า ignore: built-in สำหรับ Xcode/SPM/JS + เพิ่ม pattern เองได้ -->
+  <div class="card">
+    <h2>🚫 ไฟล์ที่ข้าม (ไม่ sync)</h2>
+    <p class="hint" style="margin:0">ข้ามอัตโนมัติทุกระดับ — sync เฉพาะ source จริง:</p>
+    <p class="hint" style="margin:6px 0 0">📁 <code>.git node_modules .build DerivedData xcuserdata Pods Carthage .swiftpm build</code> ฯลฯ ·
+      bundle ที่ Xcode สร้าง <code>*.app *.dSYM *.xcarchive *.xcresult</code><br>
+      📄 <code>.DS_Store *.xcuserstate *.o *.hmap *.ipa *.crswap</code> ฯลฯ</p>
+    <details class="off" id="ignoreDetails">
+      <summary>➕ เพิ่ม pattern เอง (บันทึกอัตโนมัติ)</summary>
+      <textarea id="customIgnore" placeholder="บรรทัดละ 1 pattern เช่น&#10;*.log&#10;Secrets.plist&#10;fastlane/"></textarea>
+      <p class="hint" style="margin-top:6px">รูปแบบ: <code>ชื่อ</code> = ตรงตัว (ไฟล์/โฟลเดอร์ ทุกระดับ) · <code>*.ext</code> = ลงท้ายด้วย · <code>ชื่อ/</code> = เฉพาะโฟลเดอร์ · <code>#</code> = คอมเมนต์ — มีผลทั้งตอนส่งและตอนรับ</p>
+    </details>
   </div>
 
   <!-- ควบคุม sync -->
@@ -263,9 +287,57 @@ async function decSDP(s) {
 }
 const fmtTime = () => new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const CHUNK = 64 * 1024, HIGH_WATER = 8 * 1024 * 1024;
-// โฟลเดอร์ที่ข้ามทุกระดับ (build cache/regenerate ได้ — กันลาก .build หนักๆ ของ iOS/SPM มาด้วย)
+// ===== ignore engine: ข้ามไฟล์/โฟลเดอร์ที่ regenerate ได้ (เน้น Xcode/SPM/JS) =====
+// โฟลเดอร์ที่ข้ามทุกระดับ — build cache สร้างใหม่ได้ ไม่ใช่ source
 const IGNORE_DIRS = new Set([".git", "node_modules", ".build", "DerivedData", ".swiftpm", "Pods",
-  "ModuleCache", ".svn", ".hg", ".gradle", "build", ".next", ".cache", "__pycache__", ".venv", "venv", ".idea"]);
+  "ModuleCache", ".svn", ".hg", ".gradle", "build", ".next", ".cache", "__pycache__", ".venv", "venv", ".idea",
+  "xcuserdata", "Carthage", ".Trash"]);
+// โฟลเดอร์ที่ลงท้ายด้วย… (bundle ที่ Xcode generate: ผล build/archive/test result)
+const IGNORE_DIR_SUFFIX = [".dSYM", ".xcarchive", ".xcresult", ".app"];
+// ไฟล์ที่ข้าม: ชื่อตรงตัว + ลงท้ายด้วย…
+const IGNORE_FILES = new Set([".DS_Store", "Thumbs.db"]);
+const IGNORE_FILE_SUFFIX = [".crswap", ".xcuserstate", ".xcscmblueprint", ".o", ".hmap", ".ipa", ".profraw", ".pyc"];
+// pattern ที่ผู้ใช้เพิ่มเอง (textarea ในการ์ด ignore · เก็บใน localStorage):
+//   "ชื่อ" = ตรงตัว (ไฟล์/โฟลเดอร์ ทุกระดับ) · "*.ext" = ลงท้ายด้วย · "ชื่อ/" = เฉพาะโฟลเดอร์ · "#" = คอมเมนต์
+let customIgnore = { any: new Set(), anySuf: [], dirOnly: new Set(), dirOnlySuf: [] };
+function parseCustomIgnore(text) {
+  const c = { any: new Set(), anySuf: [], dirOnly: new Set(), dirOnlySuf: [] };
+  for (let line of (text || "").split("\n")) {
+    line = line.trim(); if (!line || line.startsWith("#")) continue;
+    const dirOnly = line.endsWith("/"); if (dirOnly) line = line.replace(/\/+$/, "");
+    if (!line) continue;
+    if (line.startsWith("*")) (dirOnly ? c.dirOnlySuf : c.anySuf).push(line.slice(1));
+    else (dirOnly ? c.dirOnly : c.any).add(line);
+  }
+  return c;
+}
+function isIgnoredDir(name) {
+  return IGNORE_DIRS.has(name) || IGNORE_DIR_SUFFIX.some(s => name.endsWith(s))
+    || customIgnore.any.has(name) || customIgnore.dirOnly.has(name)
+    || customIgnore.anySuf.some(s => name.endsWith(s)) || customIgnore.dirOnlySuf.some(s => name.endsWith(s));
+}
+function isIgnoredFile(name) {
+  return IGNORE_FILES.has(name) || IGNORE_FILE_SUFFIX.some(s => name.endsWith(s))
+    || customIgnore.any.has(name) || customIgnore.anySuf.some(s => name.endsWith(s));
+}
+// เช็คทั้ง path — ใช้ฝั่ง "รับ" ด้วย กันอีกเครื่อง (เวอร์ชันเก่า/กติกาต่างกัน) ส่งไฟล์ขยะมาเขียนทับ
+function isIgnoredPath(path) {
+  const parts = path.split("/");
+  for (let i = 0; i < parts.length - 1; i++) if (isIgnoredDir(parts[i])) return true;
+  return isIgnoredFile(parts[parts.length - 1]);
+}
+// โหลด/บันทึก custom pattern + อัปเดตจำนวนไฟล์ทันทีเมื่อแก้
+const IGNORE_KEY = "webbeam.ignore.custom";
+$("customIgnore").value = localStorage.getItem(IGNORE_KEY) || "";
+customIgnore = parseCustomIgnore($("customIgnore").value);
+if ($("customIgnore").value.trim()) $("ignoreDetails").open = true;
+let _igTimer = null;
+$("customIgnore").addEventListener("input", () => {
+  localStorage.setItem(IGNORE_KEY, $("customIgnore").value);
+  customIgnore = parseCustomIgnore($("customIgnore").value);
+  clearTimeout(_igTimer);
+  _igTimer = setTimeout(async () => { if (store && store.list) { try { refreshStats((await store.list()).length); } catch {} } }, 400);
+});
 
 let pc = null, channel = null, role = "a";
 let myName = localStorage.getItem("webbeam.syncname") || "";
@@ -299,6 +371,20 @@ function onConnected() {
   syncBtnIdle();
 }
 function onDisconnected(r) { setStatus(r || "หลุดการเชื่อมต่อ", ""); syncBtnIdle(); }
+
+// ================= connection mode: hotspot / manual (โชว์ทีละโหมด) =================
+let connMode = localStorage.getItem("webbeam.connmode") || "hotspot";
+function applyConnMode() {
+  [...$("connModeSeg").children].forEach(b => b.classList.toggle("on", b.dataset.cmode === connMode));
+  $("connHotspot").classList.toggle("hidden", connMode !== "hotspot");
+  $("connManual").classList.toggle("hidden", connMode !== "manual");
+}
+$("connModeSeg").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  connMode = b.dataset.cmode; localStorage.setItem("webbeam.connmode", connMode);
+  applyConnMode();
+});
+applyConnMode();
 
 // ================= role =================
 $("roleSeg").addEventListener("click", (e) => {
@@ -593,9 +679,8 @@ let store = null;
 function fsStore(rootHandle) {
   async function walk(dir, base, out) {
     for await (const [name, h] of dir.entries()) {
-      if (h.kind === "directory" && IGNORE_DIRS.has(name)) continue;   // ข้ามทุกระดับ
-      if (name === ".DS_Store") continue;
-      if (name.endsWith(".crswap")) continue;   // ไฟล์ swap ชั่วคราวของ Chrome — ไม่นับ/ไม่ sync
+      if (h.kind === "directory" && isIgnoredDir(name)) continue;   // ข้ามทุกระดับ (build/auto-generate)
+      if (h.kind === "file" && isIgnoredFile(name)) continue;       // .DS_Store/.crswap/.xcuserstate ฯลฯ
       const path = base ? base + "/" + name : name;
       if (h.kind === "file") { const f = await h.getFile(); out.push({ path, size: f.size, mtime: f.lastModified }); }
       else if (h.kind === "directory") await walk(h, path, out);
@@ -616,7 +701,7 @@ function fsStore(rootHandle) {
         const kids = [];
         for await (const [name, h] of dir.entries()) kids.push([name, h]);
         for (const [name, h] of kids) {
-          if (h.kind === "directory") { if (!IGNORE_DIRS.has(name)) await rm(h); }
+          if (h.kind === "directory") { if (!isIgnoredDir(name)) await rm(h); }
           else if (name.endsWith(".crswap")) { try { await dir.removeEntry(name); n++; } catch {} }
         }
       }
@@ -845,6 +930,7 @@ async function finishBundle() {
   if (inc.meta.gz) { try { blob = await gunzipBlob(blob); } catch (e) { logLine("err", "แตกชุดไฟล์ไม่ได้", e.message); return; } }
   const buf = await blob.arrayBuffer(); let off = 0;
   for (const f of inc.meta.files) {
+    if (isIgnoredPath(f.path)) { pullGot++; logLine("info", "ข้าม (ignore)", f.path); off += f.size; continue; }
     try {
       await store.write(f.path, new Blob([buf.slice(off, off + f.size)]));
       recvIndex[f.path] = f.osize + ":" + f.smtime;
@@ -865,6 +951,7 @@ async function finishIncoming() {
   if (inc.meta.gz) { try { blob = await gunzipBlob(blob); } catch (e) { logLine("err", "แตกไฟล์ zip ไม่ได้", inc.meta.path || inc.meta.name || ""); } }
   if (inc.meta.kind === "chat") { receiveChatFile(inc.meta, blob); return; }
   if (!store) return;                                       // sync → เขียนทับ
+  if (isIgnoredPath(inc.meta.path)) { pullGot++; refreshStats(); resetWatchdog(); logLine("info", "ข้าม (ignore)", inc.meta.path); return; }
   try {
     await store.write(inc.meta.path, blob);
     if (inc.meta.osize != null && inc.meta.smtime != null) recvIndex[inc.meta.path] = inc.meta.osize + ":" + inc.meta.smtime;
