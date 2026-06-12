@@ -121,8 +121,22 @@ const db3 = B.run('SYNC.dump()');
 chk(db3['src/f5.js'] === 'CHANGED!', 'ได้ไฟล์ที่แก้');
 chk(A.run('SYNC.stats()').up === upAfter + 31, 'ส่งครบทั้งหมดอีกครั้ง (' + A.run('SYNC.stats()').up + ')');
 
-// ---- test 4: chat — ส่งไฟล์ใน chat ทั้ง text และ binary ----
-console.log('test 4: ส่งไฟล์ใน chat (text + binary)');
+// ---- test 4: ดึงแบบ zip ก้อนเดียว (รวม+บีบ → แตกปลายทาง) ----
+console.log('test 4: ดึงแบบ zip ก้อนเดียว');
+B.$('zipAll').checked = true;
+const upZ = A.run('SYNC.stats()').up;
+B.run('SYNC.pullAll()');
+for (let i = 0; i < 150; i++) { await sleep(50); if (A.run('SYNC.stats()').up >= upZ + 31) break; }
+await sleep(300);
+const dz = B.run('SYNC.dump()');
+chk(Object.keys(filesA).filter(p => p !== 'src/f5.js').every(p => dz[p] === filesA[p]), 'zip: ไฟล์เล็กครบ (แตกจากก้อนเดียว)');
+chk(dz['big.bin'] && dz['big.bin'].length === 600 * 1024, 'zip: ไฟล์ใหญ่ 600KB ครบ');
+chk(dz['src/f5.js'] === 'CHANGED!', 'zip: ได้ไฟล์ที่แก้ล่าสุด');
+chk(A.run('SYNC.stats()').up === upZ + 31, 'zip: นับส่งครบ 31 (' + A.run('SYNC.stats()').up + ')');
+B.$('zipAll').checked = false;
+
+// ---- test 5: chat — ส่งไฟล์ใน chat ทั้ง text และ binary ----
+console.log('test 5: ส่งไฟล์ใน chat (text + binary)');
 await A.run('SYNC.sendChatFile("note.txt", "hello chat file")');
 for (let i = 0; i < 60; i++) { await sleep(50); if (B.run('SYNC.chatText()').includes('note.txt')) break; }
 chk(B.run('SYNC.chatText()').includes('note.txt'), 'B รับไฟล์ text ใน chat (note.txt)');
@@ -134,8 +148,8 @@ for (let i = 0; i < 60; i++) { await sleep(50); if (B.run('SYNC.chatText()').inc
 chk(B.run('SYNC.chatText()').includes('pic.bin'), 'B รับไฟล์ binary ใน chat (pic.bin)');
 chk(B.run('SYNC.chatText()').includes('8 B'), 'แสดงขนาดไฟล์ด้วย fmtBytes (8 B)');
 
-// ---- test 5: encSDP/decSDP roundtrip + mungeSDP ----
-console.log('test 5: รหัสเชื่อมต่อแบบย่อ + แทน mDNS ด้วย IP');
+// ---- test 6: encSDP/decSDP roundtrip + mungeSDP ----
+console.log('test 6: รหัสเชื่อมต่อแบบย่อ + แทน mDNS ด้วย IP');
 const sdpIn = 'v=0\r\na=candidate:123 1 udp 2122 abcd-ef12.local 5000 typ host generation 0\r\na=candidate:124 1 tcp 2121 9999-8888.local 5001 typ host\r\n';
 A.ctx.__sdp = sdpIn;
 const enc1 = await A.run('encSDP({ type: "offer", sdp: __sdp })');
