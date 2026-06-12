@@ -689,10 +689,17 @@ function fsStore(rootHandle) {
       else if (h.kind === "directory") await walk(h, path, out);
     }
   }
+  const dirCache = new Map();   // path โฟลเดอร์ -> handle · กัน resolve ซ้ำทุกไฟล์ (handle อยู่ได้ตลอดอายุ store)
   async function navTo(path, create) {
-    const parts = path.split("/"); let dir = rootHandle;
-    for (let i = 0; i < parts.length - 1; i++) dir = await dir.getDirectoryHandle(parts[i], { create });
-    return { dir, name: parts[parts.length - 1] };
+    const parts = path.split("/"); const name = parts.pop();
+    let dir = rootHandle, key = "";
+    for (const p of parts) {
+      key = key ? key + "/" + p : p;
+      let h = dirCache.get(key);
+      if (!h) { h = await dir.getDirectoryHandle(p, { create }); dirCache.set(key, h); }
+      dir = h;
+    }
+    return { dir, name };
   }
   return {
     async list() { const out = []; await walk(rootHandle, "", out); return out; },
@@ -935,16 +942,15 @@ async function finishBundle() {
   const inc = incoming; incoming = null; if (!inc || !store) return;
   let blob = new Blob(inc.parts);
   if (inc.meta.gz) { try { blob = await gunzipBlob(blob); } catch (e) { logLine("err", "แตกชุดไฟล์ไม่ได้", e.message); return; } }
-  const buf = await blob.arrayBuffer(); let off = 0;
+  let off = 0; const jobs = [];   // Blob.slice (view ไม่คัดลอก) แล้วเขียนขนานกัน
   for (const f of inc.meta.files) {
-    if (isIgnoredPath(f.path)) { pullGot++; logLine("info", "ข้าม (ignore)", f.path); off += f.size; continue; }
-    try {
-      await store.write(f.path, new Blob([buf.slice(off, off + f.size)]));
-      recvIndex[f.path] = f.osize + ":" + f.smtime;
-      nDown++; pullGot++; logLine("down", "← แทนที่", f.path);
-    } catch (e) { logLine("err", "เขียนพลาด", f.path + " (" + e.message + ")"); }
-    off += f.size;
+    if (isIgnoredPath(f.path)) { pullGot++; off += f.size; continue; }
+    jobs.push({ f, part: blob.slice(off, off + f.size) }); off += f.size;
   }
+  await pmap(jobs, 8, async ({ f, part }) => {
+    try { await store.write(f.path, part); recvIndex[f.path] = f.osize + ":" + f.smtime; nDown++; pullGot++; logLine("down", "← แทนที่", f.path); }
+    catch (e) { logLine("err", "เขียนพลาด", f.path + " (" + e.message + ")"); }
+  });
   refreshStats(); resetWatchdog();
 }
 // 📦 รับ zip ก้อนเดียว: gunzip → อ่าน manifest (4 ไบต์ความยาว + JSON) → ตัดไฟล์ตาม size เขียนทีละไฟล์
@@ -956,17 +962,27 @@ async function finishZip() {
   // อ่าน manifest จากหัวก้อน (ไม่ดึงทั้งก้อนเป็น ArrayBuffer — กันคัดลอกข้อมูลซ้ำ/หน่วง)
   const mlen = new DataView(await blob.slice(0, 4).arrayBuffer()).getUint32(0, true);
   let metas; try { metas = JSON.parse(await blob.slice(4, 4 + mlen).text()); } catch (e) { logLine("err", "manifest zip เสีย", e.message); return; }
-  let off = 4 + mlen, i = 0;
+  // ตัดเป็น Blob.slice (view ไม่คัดลอก) แล้วเขียนขนานกัน — กลบ latency ของ createWritable/close ต่อไฟล์
+  let off = 4 + mlen; const jobs = [];
   for (const f of metas) {
     if (isIgnoredPath(f.path)) { pullGot++; off += f.size; continue; }
-    try {
-      await store.write(f.path, blob.slice(off, off + f.size));   // Blob.slice = view ไม่คัดลอก → เขียนตรงๆ เร็วกว่ามาก
-      nDown++; pullGot++; logLine("down", "← แทนที่", f.path);
-    } catch (e) { logLine("err", "เขียนพลาด", f.path + " (" + e.message + ")"); }
-    off += f.size;
-    if (++i % 25 === 0) { setProgressFast(pprog() + " · กำลังแตก zip", i / metas.length); resetWatchdog(); }
+    jobs.push({ path: f.path, part: blob.slice(off, off + f.size) }); off += f.size;
   }
+  let done = 0;
+  await pmap(jobs, 8, async (j) => {
+    try { await store.write(j.path, j.part); nDown++; pullGot++; logLine("down", "← แทนที่", j.path); }
+    catch (e) { logLine("err", "เขียนพลาด", j.path + " (" + e.message + ")"); }
+    if (++done % 25 === 0) { setProgressFast(pprog() + " · กำลังแตก zip", done / jobs.length); resetWatchdog(); }
+  });
   refreshStats(); resetWatchdog();
+}
+// รัน fn กับทุก item พร้อมกันได้สูงสุด limit ตัว (กลบ latency I/O) · รักษาผลลัพธ์ไม่ต้องเรียงก็ได้
+async function pmap(items, limit, fn) {
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) { const idx = i++; await fn(items[idx], idx); }
+  });
+  await Promise.all(workers);
 }
 // incremental: จำว่า "เคยรับไฟล์ไหนมาแล้ว" (path -> "size:mtime" ของฝั่งส่ง) เพื่อข้ามไฟล์ที่ไม่เปลี่ยนรอบหน้า
 let recvIndex = {}, recvKey = "webbeam.recv.mem", pullHave = null;
