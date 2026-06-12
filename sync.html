@@ -952,18 +952,19 @@ async function finishZip() {
   const inc = incoming; incoming = null; if (!inc || !store) return;
   let blob = new Blob(inc.parts);
   if (inc.meta.gz) { try { blob = await gunzipBlob(blob); } catch (e) { logLine("err", "แตก zip ไม่ได้", e.message); return; } }
-  const buf = await blob.arrayBuffer();
-  if (buf.byteLength < 4) { logLine("err", "zip เสีย", "ก้อนสั้นเกินไป"); return; }
-  const mlen = new DataView(buf).getUint32(0, true);
-  let metas; try { metas = JSON.parse(new TextDecoder().decode(buf.slice(4, 4 + mlen))); } catch (e) { logLine("err", "manifest zip เสีย", e.message); return; }
-  let off = 4 + mlen;
+  if (blob.size < 4) { logLine("err", "zip เสีย", "ก้อนสั้นเกินไป"); return; }
+  // อ่าน manifest จากหัวก้อน (ไม่ดึงทั้งก้อนเป็น ArrayBuffer — กันคัดลอกข้อมูลซ้ำ/หน่วง)
+  const mlen = new DataView(await blob.slice(0, 4).arrayBuffer()).getUint32(0, true);
+  let metas; try { metas = JSON.parse(await blob.slice(4, 4 + mlen).text()); } catch (e) { logLine("err", "manifest zip เสีย", e.message); return; }
+  let off = 4 + mlen, i = 0;
   for (const f of metas) {
-    if (isIgnoredPath(f.path)) { pullGot++; logLine("info", "ข้าม (ignore)", f.path); off += f.size; continue; }
+    if (isIgnoredPath(f.path)) { pullGot++; off += f.size; continue; }
     try {
-      await store.write(f.path, new Blob([buf.slice(off, off + f.size)]));
-      nDown++; pullGot++; setProgressFast(pprog() + " · กำลังแตก zip", null); logLine("down", "← แทนที่", f.path);
+      await store.write(f.path, blob.slice(off, off + f.size));   // Blob.slice = view ไม่คัดลอก → เขียนตรงๆ เร็วกว่ามาก
+      nDown++; pullGot++; logLine("down", "← แทนที่", f.path);
     } catch (e) { logLine("err", "เขียนพลาด", f.path + " (" + e.message + ")"); }
     off += f.size;
+    if (++i % 25 === 0) { setProgressFast(pprog() + " · กำลังแตก zip", i / metas.length); resetWatchdog(); }
   }
   refreshStats(); resetWatchdog();
 }
