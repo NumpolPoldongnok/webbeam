@@ -957,6 +957,13 @@ function chatCode(text, label, fileMsg) {
   const pre = document.createElement("pre"); pre.textContent = text;
   b.appendChild(head); b.appendChild(pre); return b;
 }
+function fmtBytes(n) {
+  if (n == null || isNaN(n)) return "";
+  if (n < 1024) return n + " B";
+  const u = ["KB", "MB", "GB", "TB"]; let v = n, i = -1;
+  do { v /= 1024; i++; } while (v >= 1024 && i < u.length - 1);
+  return (v < 10 ? v.toFixed(1) : Math.round(v)) + " " + u[i];
+}
 function chatFile(m) {
   const b = document.createElement("div"); b.className = "bubble file";
   b.innerHTML = '<span style="font-size:20px">📄</span>';

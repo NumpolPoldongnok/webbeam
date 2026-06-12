@@ -9,12 +9,18 @@ const js = html.match(/<script>([\s\S]*?)<\/script>/g).pop().replace(/<\/?script
 
 function makeEl(id) {
   const el = {
-    id, value: '', textContent: '', innerHTML: '', disabled: false, open: false, checked: false,
+    id, value: '', textContent: '', _html: '', disabled: false, open: false, checked: false,
     style: {}, dataset: {}, children: [], scrollTop: 0, scrollHeight: 0,
     classList: { add(){}, remove(){}, toggle(){}, contains: () => false },
     addEventListener(){}, removeEventListener(){}, remove(){}, select(){}, focus(){}, click(){},
     appendChild(c){ this.children.push(c); return c; },
     prepend(c){ this.children.unshift(c); },
+    // ตั้ง innerHTML → สร้าง child element ตามจำนวน top-level tag (พอให้ fm.children[i] ใช้งานได้)
+    set innerHTML(html) { this._html = html; this.children = [];
+      const re = /<(\w+)([^>]*)>([\s\S]*?)<\/\1>|<(\w+)([^>]*)\/?>/g; let m;
+      while ((m = re.exec(html))) { const c = makeEl('h'); c.textContent = (m[3] || '').replace(/<[^>]+>/g, ''); this.children.push(c); } },
+    get innerHTML(){ return this._html; },
+    get innerText(){ const f = e => (e.textContent || '') + e.children.map(f).join(' '); return f(this); },
     get firstChild(){ return this.children[0]; },
     get lastChild(){ return this.children[this.children.length - 1]; },
     querySelector(){ return makeEl('q'); },
@@ -29,7 +35,8 @@ function makeCtx(name) {
   const sandbox = {
     console, setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask,
     performance, crypto, Blob, File, TextEncoder, TextDecoder, Response,
-    CompressionStream, DecompressionStream, URL,
+    CompressionStream, DecompressionStream,
+    URL: Object.assign(Object.create(URL), { createObjectURL: () => 'blob:stub', revokeObjectURL(){} }),
     btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
     atob: (s) => Buffer.from(s, 'base64').toString('binary'),
     localStorage: { getItem: k => storage.has(k) ? storage.get(k) : null, setItem: (k,v) => storage.set(k, String(v)), removeItem: k => storage.delete(k) },
@@ -114,8 +121,21 @@ const db3 = B.run('SYNC.dump()');
 chk(db3['src/f5.js'] === 'CHANGED!', 'ได้ไฟล์ที่แก้');
 chk(A.run('SYNC.stats()').up === upAfter + 31, 'ส่งครบทั้งหมดอีกครั้ง (' + A.run('SYNC.stats()').up + ')');
 
-// ---- test 4: encSDP/decSDP roundtrip + mungeSDP ----
-console.log('test 4: รหัสเชื่อมต่อแบบย่อ + แทน mDNS ด้วย IP');
+// ---- test 4: chat — ส่งไฟล์ใน chat ทั้ง text และ binary ----
+console.log('test 4: ส่งไฟล์ใน chat (text + binary)');
+await A.run('SYNC.sendChatFile("note.txt", "hello chat file")');
+for (let i = 0; i < 60; i++) { await sleep(50); if (B.run('SYNC.chatText()').includes('note.txt')) break; }
+chk(B.run('SYNC.chatText()').includes('note.txt'), 'B รับไฟล์ text ใน chat (note.txt)');
+let binErr = null;
+try { await A.run('sendChatFile(new File([new Uint8Array([1,2,3,4,5,250,251,252])], "pic.bin", { type: "application/octet-stream" }))'); }
+catch (e) { binErr = e.message; }
+chk(!binErr, 'ส่งไฟล์ binary ไม่ throw (' + (binErr || 'ok') + ')');
+for (let i = 0; i < 60; i++) { await sleep(50); if (B.run('SYNC.chatText()').includes('pic.bin')) break; }
+chk(B.run('SYNC.chatText()').includes('pic.bin'), 'B รับไฟล์ binary ใน chat (pic.bin)');
+chk(B.run('SYNC.chatText()').includes('8 B'), 'แสดงขนาดไฟล์ด้วย fmtBytes (8 B)');
+
+// ---- test 5: encSDP/decSDP roundtrip + mungeSDP ----
+console.log('test 5: รหัสเชื่อมต่อแบบย่อ + แทน mDNS ด้วย IP');
 const sdpIn = 'v=0\r\na=candidate:123 1 udp 2122 abcd-ef12.local 5000 typ host generation 0\r\na=candidate:124 1 tcp 2121 9999-8888.local 5001 typ host\r\n';
 A.ctx.__sdp = sdpIn;
 const enc1 = await A.run('encSDP({ type: "offer", sdp: __sdp })');
