@@ -1,6 +1,5 @@
-// Headless protocol test: run sync.html's real script in 2 vm contexts (A,B),
-// wire a loopback "data channel", then test: pull-all (bundles+big file),
-// incremental skip, one-way, encSDP/decSDP roundtrip, mungeSDP IP replacement.
+// Headless test: รัน script จริงของ sync.html ใน 2 vm context (A,B), ต่อ loopback "data channel"
+// แล้วทดสอบ: แชตข้อความ, ส่งไฟล์ใน chat (text/binary/image), encSDP/decSDP roundtrip, mungeSDP
 import vm from 'node:vm';
 import fs from 'node:fs';
 
@@ -10,24 +9,21 @@ const js = html.match(/<script>([\s\S]*?)<\/script>/g).pop().replace(/<\/?script
 function makeEl(id) {
   const el = {
     id, value: '', textContent: '', _html: '', disabled: false, open: false, checked: false,
-    style: {}, dataset: {}, children: [], scrollTop: 0, scrollHeight: 0,
+    style: {}, dataset: {}, children: [], scrollTop: 0, scrollHeight: 0, src: '', alt: '', loading: '',
     classList: { add(){}, remove(){}, toggle(){}, contains: () => false },
     addEventListener(){}, removeEventListener(){}, remove(){}, select(){}, focus(){}, click(){},
     appendChild(c){ this.children.push(c); return c; },
     prepend(c){ this.children.unshift(c); },
-    // ตั้ง innerHTML → สร้าง child element ตามจำนวน top-level tag (พอให้ fm.children[i] ใช้งานได้)
-    set innerHTML(html) { this._html = html; this.children = [];
-      const re = /<(\w+)([^>]*)>([\s\S]*?)<\/\1>|<(\w+)([^>]*)\/?>/g; let m;
-      while ((m = re.exec(html))) { const c = makeEl('h'); c.textContent = (m[3] || '').replace(/<[^>]+>/g, ''); this.children.push(c); } },
+    set innerHTML(h){ this._html = h; if (!h) this.children = []; },
     get innerHTML(){ return this._html; },
     get innerText(){ const f = e => (e.textContent || '') + e.children.map(f).join(' '); return f(this); },
     get firstChild(){ return this.children[0]; },
     get lastChild(){ return this.children[this.children.length - 1]; },
-    querySelector(){ return makeEl('q'); },
-    querySelectorAll(){ return []; },
+    querySelector(){ return makeEl('q'); }, querySelectorAll(){ return []; },
   };
   return el;
 }
+
 function makeCtx(name) {
   const els = new Map();
   const $ = (id) => { if (!els.has(id)) els.set(id, makeEl(id)); return els.get(id); };
@@ -40,36 +36,20 @@ function makeCtx(name) {
     btoa: (s) => Buffer.from(s, 'binary').toString('base64'),
     atob: (s) => Buffer.from(s, 'base64').toString('binary'),
     localStorage: { getItem: k => storage.has(k) ? storage.get(k) : null, setItem: (k,v) => storage.set(k, String(v)), removeItem: k => storage.delete(k) },
-    document: {
-      getElementById: $, createElement: () => makeEl('new'),
-      querySelectorAll: () => [], addEventListener(){},
-    },
-    navigator: {},
+    document: { getElementById: $, createElement: () => makeEl('new'), querySelectorAll: () => [], addEventListener(){} },
+    navigator: {}, alert: (m) => console.log('ALERT:', m), confirm: () => true,
     addEventListener(){}, removeEventListener(){},
-    Date, JSON, Math, Promise, RegExp, Object, Array, Map, Set, Number, String, Uint8Array, ArrayBuffer,
+    Date, JSON, Math, Promise, RegExp, Object, Array, Map, Set, Number, String, Uint8Array, ArrayBuffer, DataView, isNaN,
   };
-  sandbox.window = sandbox;
-  sandbox.globalThis = sandbox;
+  sandbox.window = sandbox; sandbox.globalThis = sandbox;
   const ctx = vm.createContext(sandbox);
-  vm.runInContext(js, ctx, { filename: name + '.js' });
+  try { vm.runInContext(js, ctx, { filename: name + '.js' }); } catch (e) { console.log('SCRIPT ERR', name, e.message); throw e; }
   return { ctx, $, run: (code) => vm.runInContext(code, ctx) };
 }
 
 const A = makeCtx('A'), B = makeCtx('B');
-
-// loopback channels
-function chan(other) {
-  return {
-    readyState: 'open', binaryType: '', bufferedAmount: 0, bufferedAmountLowThreshold: 0,
-    addEventListener(){}, removeEventListener(){},
-    send(data) { queueMicrotask(() => other._recv(data)); },
-  };
-}
-const chA = chan(null), chB = chan(null);
-chA._recv = null; chB._recv = null;
-// A.send -> B.onMessage ; B.send -> A.onMessage
-const cA = { ...chA, send: d => queueMicrotask(() => B.run('channel.onmessage')( { data: d } )) };
-const cB = { ...chB, send: d => queueMicrotask(() => A.run('channel.onmessage')( { data: d } )) };
+const cA = { readyState:'open', binaryType:'', bufferedAmount:0, bufferedAmountLowThreshold:0, addEventListener(){}, removeEventListener(){}, send: d => queueMicrotask(() => B.run('channel.onmessage')({ data: d })) };
+const cB = { readyState:'open', binaryType:'', bufferedAmount:0, bufferedAmountLowThreshold:0, addEventListener(){}, removeEventListener(){}, send: d => queueMicrotask(() => A.run('channel.onmessage')({ data: d })) };
 A.ctx.__ch = cA; B.ctx.__ch = cB;
 A.run('setupChannel(__ch)'); B.run('setupChannel(__ch)');
 A.run('channel.onopen()'); B.run('channel.onopen()');
@@ -77,79 +57,39 @@ A.run('channel.onopen()'); B.run('channel.onopen()');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 let fails = 0;
 const chk = (c, m) => { console.log((c ? '  ✓ ' : '  ❌ ') + m); if (!c) fails++; };
-
-// ---- test 1: pull with bundles + big file ----
-const filesA = {};
-for (let i = 0; i < 30; i++) filesA['src/f' + i + '.js'] = 'console.log(' + i + ');//' + 'x'.repeat(50 + i);
-A.ctx.__big = 'B'.repeat(600 * 1024); // > SMALL(256KB) -> single-file path
-A.run('SYNC.initMem({})');
-A.run(`(async () => { const f = ${JSON.stringify(filesA)}; for (const p in f) await SYNC.put(p, f[p]); await SYNC.put('big.bin', __big); })()`);
-B.run('SYNC.initMem({ "src/f0.js": "STALE", "onlyB.txt": "KEEP" })');
+const waitB = async (sub) => { for (let i = 0; i < 80; i++) { await sleep(40); if (B.run('WB.chatText()').includes(sub)) return true; } return false; };
 await sleep(50);
 
-console.log('test 1: ดึงทั้งหมด (ชุดไฟล์เล็ก + ไฟล์ใหญ่เดี่ยว)');
-B.run('SYNC.pullAll()');
-for (let i = 0; i < 100; i++) { await sleep(100); const d = B.run('SYNC.dump()'); if (d && d['big.bin'] && d['src/f29.js']) break; }
-await sleep(300);
-const db = B.run('SYNC.dump()');
-chk(db['src/f0.js'] === filesA['src/f0.js'], 'ไฟล์ stale ถูกเขียนทับ');
-chk(Object.keys(filesA).every(p => db[p] === filesA[p]), 'ไฟล์เล็กครบ 30 ไฟล์ (มาเป็นชุด gzip)');
-chk(db['big.bin'] && db['big.bin'].length === 600 * 1024, 'ไฟล์ใหญ่ 600KB ครบ (ส่งเดี่ยว)');
-chk(db['onlyB.txt'] === 'KEEP', 'ไฟล์ที่ A ไม่มี ไม่ถูกลบ');
-const da = A.run('SYNC.dump()');
-chk(!da['onlyB.txt'], 'ทางเดียว: A ไม่เปลี่ยน');
-const stB = B.run('SYNC.stats()');
-chk(stB.down === 31, 'นับรับเข้า = 31 (' + stB.down + ')');
+// ---- test 1: แชตข้อความ ----
+console.log('test 1: แชตข้อความ A → B');
+A.run('WB.sendChat("สวัสดี B จาก A")');
+chk(await waitB('สวัสดี B จาก A'), 'B เห็นข้อความจาก A');
 
-// ---- test 2: ดึงซ้ำ → คัดลอกทุกไฟล์อีกครั้ง (full copy เสมอ ไม่ใช่ incremental) ----
-console.log('test 2: ดึงซ้ำ → ส่งทุกไฟล์อีกครั้ง (full copy)');
-const upBefore = A.run('SYNC.stats()').up;
-B.run('SYNC.pullAll()');
-for (let i = 0; i < 100; i++) { await sleep(50); if (A.run('SYNC.stats()').up >= upBefore + 31) break; }
-await sleep(200);
-const upAfter = A.run('SYNC.stats()').up;
-chk(upAfter === upBefore + 31, 'รอบสอง A ส่งครบ 31 อีกครั้ง (up ' + upBefore + ' → ' + upAfter + ')');
+// ---- test 2: ส่งไฟล์ text ใน chat ----
+console.log('test 2: ส่งไฟล์ text ใน chat');
+await A.run('WB.sendChatFile("note.txt", "hello chat file")');
+chk(await waitB('note.txt'), 'B รับไฟล์ text (note.txt)');
+chk(B.run('WB.chatText()').includes('hello chat file'), 'B เห็นเนื้อหาไฟล์ text (แสดงเป็นโค้ด)');
 
-// ---- test 3: แก้ 1 ไฟล์ → ดึงทั้งหมด ได้ไฟล์ที่แก้ ----
-console.log('test 3: แก้ไฟล์เดียว → ดึงทั้งหมด ได้ไฟล์ที่แก้');
-A.run('SYNC.put("src/f5.js", "CHANGED!")');
-await sleep(50);
-B.run('SYNC.pullAll()');
-for (let i = 0; i < 100; i++) { await sleep(50); if (A.run('SYNC.stats()').up >= upAfter + 31) break; }
-await sleep(200);
-const db3 = B.run('SYNC.dump()');
-chk(db3['src/f5.js'] === 'CHANGED!', 'ได้ไฟล์ที่แก้');
-chk(A.run('SYNC.stats()').up === upAfter + 31, 'ส่งครบทั้งหมดอีกครั้ง (' + A.run('SYNC.stats()').up + ')');
-
-// ---- test 4: ดึงแบบ zip ก้อนเดียว (รวม+บีบ → แตกปลายทาง) ----
-console.log('test 4: ดึงแบบ zip ก้อนเดียว');
-B.$('zipAll').checked = true;
-const upZ = A.run('SYNC.stats()').up;
-B.run('SYNC.pullAll()');
-for (let i = 0; i < 150; i++) { await sleep(50); if (A.run('SYNC.stats()').up >= upZ + 31) break; }
-await sleep(300);
-const dz = B.run('SYNC.dump()');
-chk(Object.keys(filesA).filter(p => p !== 'src/f5.js').every(p => dz[p] === filesA[p]), 'zip: ไฟล์เล็กครบ (แตกจากก้อนเดียว)');
-chk(dz['big.bin'] && dz['big.bin'].length === 600 * 1024, 'zip: ไฟล์ใหญ่ 600KB ครบ');
-chk(dz['src/f5.js'] === 'CHANGED!', 'zip: ได้ไฟล์ที่แก้ล่าสุด');
-chk(A.run('SYNC.stats()').up === upZ + 31, 'zip: นับส่งครบ 31 (' + A.run('SYNC.stats()').up + ')');
-B.$('zipAll').checked = false;
-
-// ---- test 5: chat — ส่งไฟล์ใน chat ทั้ง text และ binary ----
-console.log('test 5: ส่งไฟล์ใน chat (text + binary)');
-await A.run('SYNC.sendChatFile("note.txt", "hello chat file")');
-for (let i = 0; i < 60; i++) { await sleep(50); if (B.run('SYNC.chatText()').includes('note.txt')) break; }
-chk(B.run('SYNC.chatText()').includes('note.txt'), 'B รับไฟล์ text ใน chat (note.txt)');
+// ---- test 3: ส่งไฟล์ binary ใน chat ----
+console.log('test 3: ส่งไฟล์ binary ใน chat');
 let binErr = null;
-try { await A.run('sendChatFile(new File([new Uint8Array([1,2,3,4,5,250,251,252])], "pic.bin", { type: "application/octet-stream" }))'); }
+try { await A.run('sendChatFile(new File([new Uint8Array([1,2,3,4,5,250,251,252])], "data.bin", { type: "application/octet-stream" }))'); }
 catch (e) { binErr = e.message; }
-chk(!binErr, 'ส่งไฟล์ binary ไม่ throw (' + (binErr || 'ok') + ')');
-for (let i = 0; i < 60; i++) { await sleep(50); if (B.run('SYNC.chatText()').includes('pic.bin')) break; }
-chk(B.run('SYNC.chatText()').includes('pic.bin'), 'B รับไฟล์ binary ใน chat (pic.bin)');
-chk(B.run('SYNC.chatText()').includes('8 B'), 'แสดงขนาดไฟล์ด้วย fmtBytes (8 B)');
+chk(!binErr, 'ส่ง binary ไม่ throw (' + (binErr || 'ok') + ')');
+chk(await waitB('data.bin'), 'B รับไฟล์ binary (data.bin)');
+chk(B.run('WB.chatText()').includes('8 B'), 'แสดงขนาดไฟล์ด้วย fmtBytes (8 B)');
 
-// ---- test 6: encSDP/decSDP roundtrip + mungeSDP ----
-console.log('test 6: รหัสเชื่อมต่อแบบย่อ + แทน mDNS ด้วย IP');
+// ---- test 4: ส่งรูปภาพใน chat (พรีวิว) ----
+console.log('test 4: ส่งรูปภาพใน chat');
+let imgErr = null;
+try { await A.run('sendChatFile(new File([new Uint8Array([137,80,78,71,13,10,26,10,1,2,3])], "shot.png", { type: "image/png" }))'); }
+catch (e) { imgErr = e.message; }
+chk(!imgErr, 'ส่งรูปไม่ throw (' + (imgErr || 'ok') + ')');
+chk(await waitB('shot.png'), 'B รับรูป (shot.png) แสดงเป็นพรีวิว');
+
+// ---- test 5: encSDP/decSDP roundtrip + mungeSDP ----
+console.log('test 5: รหัสเชื่อมต่อแบบย่อ + แทน mDNS ด้วย IP');
 const sdpIn = 'v=0\r\na=candidate:123 1 udp 2122 abcd-ef12.local 5000 typ host generation 0\r\na=candidate:124 1 tcp 2121 9999-8888.local 5001 typ host\r\n';
 A.ctx.__sdp = sdpIn;
 const enc1 = await A.run('encSDP({ type: "offer", sdp: __sdp })');
